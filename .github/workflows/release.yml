@@ -54,6 +54,15 @@ jobs:
       - name: Install test in clean containers
         run: build/test-install.sh --smoke docker.io/library/debian:12 docker.io/library/ubuntu:24.04 docker.io/library/oraclelinux:8 docker.io/library/oraclelinux:9
 
+      - name: Copies under fixed names (for permanent "latest" download links)
+        run: |
+          cd build/out
+          v=$(cat ../stage/VERSION)
+          cp "lguard_${v}_amd64.deb" lguard_amd64.deb
+          cp "lguard-gui_${v}_amd64.deb" lguard-gui_amd64.deb
+          cp "lguard-${v}-1.x86_64.rpm" lguard.x86_64.rpm
+          cp "lguard-gui-${v}-1.x86_64.rpm" lguard-gui.x86_64.rpm
+
       - name: Checksums
         run: cd build/out && sha256sum *.deb *.rpm > SHA256SUMS && cat SHA256SUMS
 

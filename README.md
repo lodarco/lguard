@@ -1,6 +1,47 @@
-# Lguard
+<p align="center">
+  <img src="packaging/gui/lguard.svg" width="150" alt="Lguard">
+</p>
 
-Antivirus, download guard and ransomware shield for Linux desktops and home servers.
+<p align="center"><b>Antivirus, download guard and ransomware shield for Linux desktops and home servers.</b></p>
+
+<p align="center">
+  <a href="https://github.com/lodarco/lguard/releases/latest"><img src="https://img.shields.io/github/v/release/lodarco/lguard?label=latest%20release&color=3d72d8" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-GPL--3.0-d93025" alt="GPL-3.0"></a>
+  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-2c2c2e" alt="Linux x86_64">
+</p>
+
+<p align="center">
+  <a href="https://github.com/lodarco/lguard/releases/latest/download/lguard_amd64.deb"><img src="https://img.shields.io/badge/Download-Debian%20%2F%20Ubuntu%20(.deb)-3d72d8?style=for-the-badge&logo=debian&logoColor=white" alt="Download .deb"></a>
+  <a href="https://github.com/lodarco/lguard/releases/latest/download/lguard.x86_64.rpm"><img src="https://img.shields.io/badge/Download-RHEL%20%2F%20Fedora%20(.rpm)-d93025?style=for-the-badge&logo=redhat&logoColor=white" alt="Download .rpm"></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/overview-dark.png" width="820" alt="Lguard: overview">
+</p>
+
+## Download
+
+| | Protection and scan engine | Desktop app |
+|---|---|---|
+| **Debian 10+, Ubuntu 20.04+** | [lguard_amd64.deb](https://github.com/lodarco/lguard/releases/latest/download/lguard_amd64.deb) | [lguard-gui_amd64.deb](https://github.com/lodarco/lguard/releases/latest/download/lguard-gui_amd64.deb) |
+| **RHEL / Oracle / Alma / Rocky 8+, Fedora** | [lguard.x86_64.rpm](https://github.com/lodarco/lguard/releases/latest/download/lguard.x86_64.rpm) | [lguard-gui.x86_64.rpm](https://github.com/lodarco/lguard/releases/latest/download/lguard-gui.x86_64.rpm) |
+
+A desktop needs both packages; a server only the first. Download them into
+one folder, then:
+
+```sh
+sudo apt install ./lguard_amd64.deb ./lguard-gui_amd64.deb          # Debian / Ubuntu
+sudo dnf install ./lguard.x86_64.rpm ./lguard-gui.x86_64.rpm        # RHEL family / Fedora
+```
+
+Every version, with checksums: [all releases](https://github.com/lodarco/lguard/releases).
+What changed: [CHANGELOG.md](CHANGELOG.md).
+
+| | |
+|---|---|
+| <img src="docs/screenshots/findings-dark.png" alt="Findings and quarantine"> | <img src="docs/screenshots/folders-dark.png" alt="Folders and categories"> |
+| Findings and quarantine | Categories: media library or downloads |
+
 
 Lguard watches every file as it is written or moved into place, keeps a sealed
 inventory of what it has checked, looks after your download folders and your
@@ -76,14 +117,7 @@ in a root-only file instead (`lguard status` shows which).
 
 ## Install
 
-```sh
-# Debian / Ubuntu
-sudo apt install ./lguard_<version>_amd64.deb ./lguard-gui_<version>_amd64.deb
-# RHEL family / Fedora
-sudo dnf install ./lguard-<version>-1.x86_64.rpm ./lguard-gui-<version>-1.x86_64.rpm
-```
-
-A server needs only the `lguard` package. Installing it creates the sealed
+See [Download](#download) above. Installing the `lguard` package creates the sealed
 key, downloads signatures, starts protection and begins the first scan in the
 background at the lowest priority.
 

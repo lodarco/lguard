@@ -3,7 +3,7 @@ hand with QPainter; Qt Charts is GPL-only and not used), icons from inline SVG."
 from __future__ import annotations
 
 from PySide6.QtCore import QByteArray, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QAbstractButton, QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -94,6 +94,68 @@ class Pulse:
         elif not on:
             self.anim.stop()
             self.fx.setEnabled(False)
+
+
+class PulseBar(QWidget):
+    """Progress as a filled bar. It never runs on its own: the fill shows
+    the real percentage and breathes only while something is being scanned;
+    paused or idle, it stands still."""
+
+    def __init__(self, height: int = 8):
+        super().__init__()
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+        self.setFixedHeight(height)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.value = None            # 0..100, or None when there is no percentage
+        self.glow = 0.0
+        self.anim = QVariantAnimation(self)
+        self.anim.setDuration(1600)
+        self.anim.setStartValue(0.0)
+        self.anim.setKeyValueAt(0.5, 1.0)
+        self.anim.setEndValue(0.0)
+        self.anim.setEasingCurve(QEasingCurve.InOutSine)
+        self.anim.setLoopCount(-1)
+        self.anim.valueChanged.connect(self._step)
+
+    def _step(self, v):
+        self.glow = float(v)
+        self.update()
+
+    def set(self, value, active: bool):
+        self.value = None if value is None else max(0, min(100, int(value)))
+        if active and self.anim.state() != self.anim.State.Running:
+            self.anim.start()
+        elif not active and self.anim.state() == self.anim.State.Running:
+            self.anim.stop()
+            self.glow = 0.0
+        self.update()
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        r = self.height() / 2
+        p.setBrush(QColor(theme.current["track"]))
+        p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), r, r)
+        active = self.anim.state() == self.anim.State.Running
+        if self.value is None and not active:
+            p.end()
+            return
+        base = QColor(theme.current["accent"] if active else theme.current["dim"])
+        peak = QColor(theme.current["accent_hover"])
+        g = self.glow
+        col = QColor(int(base.red() + (peak.red() - base.red()) * g),
+                     int(base.green() + (peak.green() - base.green()) * g),
+                     int(base.blue() + (peak.blue() - base.blue()) * g))
+        if self.value is None:
+            col.setAlpha(int(60 + 120 * g))      # no percentage: the whole bar breathes
+            w = self.width()
+        else:
+            col.setAlpha(int(170 + 85 * g) if active else 150)
+            w = max(self.height(), self.width() * self.value / 100) if self.value else 0
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(0, 0, w, self.height()), r, r)
+        p.end()
 
 
 class MatrixSidebar(QFrame):
@@ -278,13 +340,24 @@ class BarChart(QWidget):
         for i, v in enumerate(self.values):
             x = i * (bw + gap)
             bh = max(3, (v / top) * (base - 6))
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c["bar_now"] if i == n - 1 else c["bar"]))
-            p.drawRoundedRect(QRectF(x, base - bh, bw, bh), 4, 4)
+            # the logo's colours: bars in the blue of the L, today's bar
+            # brighter and framed in the red of the shield
+            rect = QRectF(x, base - bh, bw, bh)
+            grad = QLinearGradient(0, base - bh, 0, base)
+            today = i == n - 1
+            grad.setColorAt(0, QColor(c["logo_blue_hi"]))
+            grad.setColorAt(1, QColor(c["logo_blue"]))
+            p.setOpacity(1.0 if today else 0.78)
+            p.setPen(QPen(QColor(c["logo_red"]), 1.6) if today else Qt.NoPen)
+            p.setBrush(grad)
+            p.drawRoundedRect(rect, 4, 4)
+            p.setOpacity(1.0)
             p.setPen(QColor(c["dim"]))
             if i < len(self.labels):
                 p.drawText(QRectF(x - 4, base + 4, bw + 8, 16), Qt.AlignHCenter | Qt.AlignTop, self.labels[i])
-        p.setPen(QColor(c["sep"]))
+        line = QColor(c["logo_red"])
+        line.setAlpha(110)
+        p.setPen(line)
         p.drawLine(0, int(base) + 1, w, int(base) + 1)
 
 
@@ -304,7 +377,10 @@ class Sparkline(BarChart):
         bw = (self.width() - gap * (n - 1)) / n
         top = max(self.values) or 1
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(c["accent"]))
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0, QColor(c["logo_blue_hi"]))
+        grad.setColorAt(1, QColor(c["logo_blue"]))
+        p.setBrush(grad)
         for i, v in enumerate(self.values):
             bh = max(3, v / top * self.height())
             p.drawRoundedRect(QRectF(i * (bw + gap), self.height() - bh, bw, bh), 2, 2)

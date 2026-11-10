@@ -16,6 +16,7 @@ LIGHT = dict(
     row_sel="rgba(61,114,216,0.10)", row_hover="#f0f2f6", btn="#f0f2f6", btn_hover="#e6e9ef", btn_edge="#cfd5e1",
     accent="#3d72d8", accent_edge="rgba(61,114,216,0.40)", accent_hover="#3363c2", accent_text="#3d72d8", success="#188038", warning="#8a6200",
     destructive="#d93025", destructive_hover="#b3261e", destructive_text="#d93025",
+    logo_blue="#3d72d8", logo_blue_hi="#7fb3ff", logo_red="#d93025",
     bar="#9db8ec", bar_now="#3d72d8", track="#e6e9ef", toast="#ffffff",
 )
 DARK = dict(
@@ -25,6 +26,7 @@ DARK = dict(
     btn_edge="#48484a",
     accent="#5a9bff", accent_edge="rgba(90,155,255,0.45)", accent_hover="#7fb3ff", accent_text="#5a9bff", success="#3ecf6e", warning="#f7c948",
     destructive="#e14b4b", destructive_hover="#f75f5f", destructive_text="#f75f5f",
+    logo_blue="#3d72d8", logo_blue_hi="#7fb3ff", logo_red="#f75f5f",
     bar="#3f6fbf", bar_now="#7fb3ff", track="#2c2c2e", toast="#1c1c1e",
 )
 # Surfaces as the stylesheet paints them. Dark gets the steel gradients;

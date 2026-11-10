@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainW
 
 from . import theme, tr
 from .client import Client
-from .pages import (BUILTIN, CategoryPage, FindingsPage, FoldersPage, HistoryPage, IntegrityPage, OverviewPage,
+from .pages import (BUILTIN, AboutPage, CategoryPage, FindingsPage, FoldersPage, HistoryPage, IntegrityPage, OverviewPage,
                     RansomwarePage, ScanPage, SettingsPage, human_int, progress_text)
 from .tr import _
 from .widgets import Card, IconLabel, MatrixSidebar, Pulse, Sparkline, icon, label, logo_icon, logo_pixmap
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
     NAV = [("overview", "Overview"), ("findings", "Findings & quarantine"),
            ("-", "Media"), ("downloads", "Downloads"), ("plex", "Plex"), ("jellyfin", "Jellyfin"),
            ("-", "Protection"), ("ransomware", "Ransomware shield"), ("integrity", "System integrity"),
-           ("folders", "Folders"), ("scan", "Scan a folder"), ("history", "History"), ("settings", "Settings")]
+           ("folders", "Folders"), ("scan", "Scan a folder"), ("history", "History"), ("settings", "Settings"), ("about", "About")]
 
     def __init__(self, client: Client, settings: QSettings, on_setting):
         super().__init__()
@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
             "jellyfin": CategoryPage(client, "jellyfin"), "ransomware": RansomwarePage(client),
             "integrity": IntegrityPage(client), "folders": FoldersPage(client), "scan": ScanPage(client),
             "history": HistoryPage(client), "settings": SettingsPage(client, settings),
+            "about": AboutPage(client),
         }
         self.pages["settings"].changed.connect(on_setting)
         self.pages["folders"].categories_changed.connect(self.set_categories)
@@ -232,15 +233,6 @@ class MainWindow(QMainWindow):
         hh.addSpacing(8)
         hh.addWidget(self.scan_btn)
         hh.addSpacing(8)
-        menu_btn = QPushButton()
-        menu_btn.setIcon(icon("menu", theme.current["ink"], 16))
-        menu_btn.setFlat(True)
-        menu_btn.setToolTip("Menu")
-        menu = QMenu(self)
-        menu.addAction(_("Settings"), lambda: self.show_page("settings"))
-        menu.addAction(_("About Lguard"), self.about)
-        menu_btn.setMenu(menu)
-        hh.addWidget(menu_btn)
         right.addWidget(header)
         right.addWidget(self.stack, 1)
         h.addLayout(right, 1)
@@ -348,13 +340,6 @@ class MainWindow(QMainWindow):
         if "not authorized" in msg:
             return
         self.foot.setText(_("Lguard service is not running") if "not reachable" in msg else msg)
-
-    def about(self):
-        from PySide6.QtWidgets import QMessageBox
-        from lguard import __version__
-        QMessageBox.about(self, "Lguard", f"Lguard {__version__}\n\nUses Qt {__import__('PySide6').QtCore.qVersion()} "
-                                          "and PySide6 under the LGPLv3; you may replace them with your own builds. "
-                                          "Licences: /opt/lguard/licenses")
 
 
 class _Bridge(QObject):

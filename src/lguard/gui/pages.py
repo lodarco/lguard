@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QFrame, QGridLayout, QHBo
 
 from . import theme
 from .tr import _
-from .widgets import BarChart, Card, Dot, IconLabel, Switch, label
+from .widgets import BarChart, Card, Dot, IconLabel, Switch, label, PulseBar
 
 
 # ------------------------------------------------------------------ helpers
@@ -129,8 +129,8 @@ def progress_text(st: dict) -> tuple[str, str, int | None, str] | None:
         return _(PHASES.get(sw.get("phase"), "Checking your drives…")), detail, pct, sw.get("current") or ""
     q = st.get("queue", 0)
     cur = st.get("current") or []
-    if q or cur:
-        return _("Checking new files…"), _("{n} waiting", n=q), None, (cur[0] if cur else "")
+    if cur:                       # files only waiting their turn are not "scanning"
+        return _("Checking new files…"), _("{n} waiting", n=q), None, cur[0]
     return None
 
 
@@ -158,9 +158,7 @@ class ScanBanner(Card):
         top.addWidget(self.pause_btn)
         top.addWidget(self.resume_btn)
         self.lay.addLayout(top)
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(8)
+        self.bar = PulseBar(8)
         self.lay.addWidget(self.bar)
         self.detail = label("", "Dim")
         self.lay.addWidget(self.detail)
@@ -195,11 +193,8 @@ class ScanBanner(Card):
         self.title.setText(title)
         self.detail.setText(detail)
         self.pct.setText(f"{pct}%" if pct is not None else "")
-        if pct is None:
-            self.bar.setRange(0, 0)            # busy
-        else:
-            self.bar.setRange(0, 100)
-            self.bar.setValue(pct)
+        scanning = bool(st.get("current")) or (running and not paused)
+        self.bar.set(pct, active=scanning)     # moves only while something is being scanned
         self.now.setText(_("Now: {file}", file=self.now.fontMetrics().elidedText(cur, Qt.ElideMiddle, 700)) if cur else "")
         self.first.setVisible(not st.get("last_sweep") and bool((st.get("sweep") or {}).get("running")))
         self.show()
@@ -990,3 +985,57 @@ class SettingsPage(Page):
             row(_(title), sw)
         self.v.addWidget(card)
         self.v.addStretch(1)
+
+
+# ------------------------------------------------------------------ about
+class AboutPage(Page):
+    title = "About"
+
+    def __init__(self, client):
+        super().__init__(client)
+        from lguard import __version__
+        from .widgets import logo_pixmap
+        card = Card(padding=28, spacing=8)
+        mark = QLabel()
+        mark.setPixmap(logo_pixmap(128, full=True))
+        mark.setFixedSize(128, 128)
+        card.lay.addWidget(mark, 0, Qt.AlignHCenter)
+        self.version = label(_("Version {v}", v=__version__), "CardTitle")
+        card.lay.addWidget(self.version, 0, Qt.AlignHCenter)
+        tag = label(_("Antivirus, download guard and ransomware shield for Linux"), "Dim", wrap=True)
+        tag.setAlignment(Qt.AlignHCenter)
+        card.lay.addWidget(tag)
+        link = QLabel('<a href="https://github.com/lodarco/lguard" style="color: %s;">github.com/lodarco/lguard</a>'
+                      % theme.current["accent_text"])
+        link.setOpenExternalLinks(True)
+        card.lay.addWidget(link, 0, Qt.AlignHCenter)
+        self.v.addWidget(card)
+
+        info = Card(padding=0, spacing=0)
+        self.rows = {}
+        for key, name in (("service", "Protection service"), ("engine", "Scan engine"), ("signatures", "Signatures"),
+                          ("qt", "Interface")):
+            r = QFrame()
+            r.setObjectName("Row")
+            h = QHBoxLayout(r)
+            h.setContentsMargins(16, 11, 16, 11)
+            h.addWidget(label(_(name)), 1)
+            value = label("–", "Dim")
+            h.addWidget(value)
+            info.lay.addWidget(r)
+            self.rows[key] = value
+        import PySide6.QtCore as qc
+        self.rows["qt"].setText(f"Qt {qc.qVersion()} (PySide6, LGPLv3)")
+        self.v.addWidget(info)
+        self.v.addWidget(label(_("about_licence"), "Dim", wrap=True))
+        self.v.addStretch(1)
+
+    def refresh(self):
+        self.client.request("ab.status", "status")
+
+    def on_result(self, tag, d):
+        if tag != "ab.status":
+            return
+        self.rows["service"].setText(f"Lguard {d.get('version', '?')}")
+        self.rows["engine"].setText(str(d.get("engine", "–")))
+        self.rows["signatures"].setText(str(d.get("signatures", "–")))

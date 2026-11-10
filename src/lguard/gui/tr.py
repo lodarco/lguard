@@ -164,6 +164,13 @@ DE = {
     "Media library – programs are quarantined": "Medienbibliothek – Programme kommen in Quarantäne",
     "Downloads – programs are allowed": "Downloads – Programme sind erlaubt",
     "running": "läuft",
+    "About": "Über",
+    "Version {v}": "Version {v}",
+    "Antivirus, download guard and ransomware shield for Linux": "Virenschutz, Download-Wächter und Ransomware-Schutz für Linux",
+    "Protection service": "Schutzdienst",
+    "Scan engine": "Scan-Engine",
+    "Interface": "Oberfläche",
+    "about_licence": "Lguard ist freie Software unter der GNU General Public License v3.0. Qt und PySide6 stehen unter der LGPLv3 und dürfen durch eigene Builds ersetzt werden; die Schriften Inter und Cascadia Mono unter der SIL Open Font License. Lizenzen: /opt/lguard/licenses und /opt/lguard/gui/licenses.",
 }
 ES = {
     "Overview": "Resumen", "Findings & quarantine": "Hallazgos y cuarentena", "Media": "Multimedia",
@@ -322,8 +329,16 @@ ES = {
     "Media library – programs are quarantined": "Biblioteca multimedia: los programas van a cuarentena",
     "Downloads – programs are allowed": "Descargas: se permiten programas",
     "running": "en curso",
+    "About": "Acerca de",
+    "Version {v}": "Versión {v}",
+    "Antivirus, download guard and ransomware shield for Linux": "Antivirus, guardián de descargas y escudo antiransomware para Linux",
+    "Protection service": "Servicio de protección",
+    "Scan engine": "Motor de análisis",
+    "Interface": "Interfaz",
+    "about_licence": "Lguard es software libre bajo la GNU General Public License v3.0. Qt y PySide6 están bajo la LGPLv3 y puedes sustituirlos por tus propias compilaciones; las fuentes Inter y Cascadia Mono, bajo la SIL Open Font License. Licencias: /opt/lguard/licenses y /opt/lguard/gui/licenses.",
 }
 EN = {
+    "about_licence": "Lguard is free software under the GNU General Public License v3.0. Qt and PySide6 are under the LGPLv3 and may be replaced with your own builds; the Inter and Cascadia Mono fonts are under the SIL Open Font License. Licences: /opt/lguard/licenses and /opt/lguard/gui/licenses.",
     "stopped_explain": "Lguard suspended the program that was changing your files. It is not closed: if you know and trust it, let it continue.",
     "folders_intro": "Choose which folders are Downloads, Plex, Jellyfin or your own categories, which are never scanned, and where Lguard only reports. Saving asks for your password and applies at once.",
     "first_scan_note": "First scan: every file is read once, which takes a few hours. You can keep working as usual.",
