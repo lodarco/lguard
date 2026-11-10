@@ -1,0 +1,12 @@
+[Unit]
+Description=Lguard full disk scan (every file read and checked again; started from the app)
+After=lguard-clamd.service
+Conflicts=lguard-sweep.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lguard/bin/lguard sweep --full
+LoadCredentialEncrypted=lguard-master:/var/lib/lguard/master.cred
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=20

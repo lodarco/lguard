@@ -1,0 +1,12 @@
+[Unit]
+Description=Lguard nightly check (changed files, new signatures, full disk scan slice)
+After=lguard-clamd.service
+Conflicts=lguard-fullscan.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lguard/bin/lguard sweep
+LoadCredentialEncrypted=lguard-master:/var/lib/lguard/master.cred
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=20

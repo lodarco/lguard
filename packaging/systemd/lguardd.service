@@ -1,0 +1,20 @@
+[Unit]
+Description=Lguard real-time protection
+Wants=lguard-clamd.service
+After=lguard-clamd.service local-fs.target
+
+[Service]
+ExecStart=/opt/lguard/bin/lguardd
+# The inventory key, sealed to this machine (TPM 2.0 when present); only this
+# service ever sees it in the clear, in memory.
+LoadCredentialEncrypted=lguard-master:/var/lib/lguard/master.cred
+RuntimeDirectory=lguard
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=10
+Nice=5
+OOMScoreAdjust=-500
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

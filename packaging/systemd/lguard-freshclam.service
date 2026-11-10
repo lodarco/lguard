@@ -1,0 +1,10 @@
+[Unit]
+Description=Lguard signature update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lguard/bin/lguard-freshclam --quiet
+Nice=10
+IOSchedulingClass=idle

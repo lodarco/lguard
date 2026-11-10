@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/lguard/python/bin/python3 -I -m lguard.daemon "$@"

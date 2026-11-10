@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Lguard</vendor>
+  <icon_name>lguard</icon_name>
+  <action id="io.github.lodarco.lguard.view">
+    <description>See Lguard status and findings</description>
+    <message>Authentication is required to see Lguard's findings</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+  <action id="io.github.lodarco.lguard.manage">
+    <description>Restore, delete or trust quarantined files; freeze or unfreeze backups</description>
+    <description xml:lang="de">Dateien aus der Quarantäne wiederherstellen, löschen oder vertrauen; Backups einfrieren</description>
+    <description xml:lang="es">Restaurar, eliminar o confiar en archivos en cuarentena; congelar copias</description>
+    <message>Authentication is required to change what Lguard has quarantined</message>
+    <message xml:lang="de">Zum Ändern der Lguard-Quarantäne ist eine Authentifizierung erforderlich</message>
+    <message xml:lang="es">Se requiere autenticación para cambiar la cuarentena de Lguard</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

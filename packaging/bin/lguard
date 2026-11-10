@@ -1,0 +1,3 @@
+#!/bin/sh
+# Lguard runs only on its own bundled Python (-I: no user site, no PYTHON* env).
+exec /opt/lguard/python/bin/python3 -I -m lguard "$@"

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Lguard
+GenericName=Antivirus
+GenericName[de]=Virenschutz
+GenericName[es]=Antivirus
+Comment=Antivirus, torrent guard and ransomware shield
+Comment[de]=Virenschutz, Torrent-Wächter und Ransomware-Schutz
+Comment[es]=Antivirus, guardián de torrents y escudo antiransomware
+Exec=lguard-gui
+Icon=lguard
+Terminal=false
+Categories=System;Security;
+Keywords=virus;antivirus;malware;ransomware;torrent;security;
+StartupWMClass=lguard

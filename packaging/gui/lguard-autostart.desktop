@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lguard
+Comment=Lguard notifications and desktop widget
+Exec=lguard-gui --background
+Icon=lguard
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+X-KDE-autostart-after=panel

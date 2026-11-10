@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+/dist/
+*.egg-info/
+.pytest_cache/
+
+# build output (scripts in build/ are part of the project)
+/build/cache/
+/build/out/
+/build/stage/
+/build/stage-rpm/
+/build/pkg-deb*/
+/build/pkg-rpm/
+
+# never published: local notes and machine-specific settings
+/PLAN.md
+/audit-*/
+/host/
+/private/

@@ -1,0 +1,28 @@
+[Unit]
+Description=Lguard scan engine (private ClamAV)
+After=lguard-freshclam.service
+
+[Service]
+ExecStartPre=/bin/sh -c 'ls /var/lib/lguard/clamav/*.c?d >/dev/null 2>&1 || /opt/lguard/bin/lguard-freshclam --quiet'
+ExecStart=/opt/lguard/clamav/sbin/clamd --config-file=/etc/lguard/clamd.conf
+ExecReload=/bin/kill -USR2 $MAINPID
+# Runs as its own user from the start; systemd creates the socket folder
+# owned by it (root's lguardd can always connect, nobody else can).
+User=lguard-clamav
+Group=lguard
+RuntimeDirectory=lguard-clamd
+RuntimeDirectoryMode=0750
+Nice=10
+IOSchedulingClass=idle
+MemoryHigh=2500M
+Restart=on-failure
+TimeoutStartSec=600
+# hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lguard/clamav /var/tmp /run/lguard-clamd /var/log/lguard
+ProtectHome=read-only
+PrivateTmp=no
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
