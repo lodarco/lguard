@@ -22,7 +22,7 @@ from .client import Client
 from .pages import (BUILTIN, CategoryPage, FindingsPage, FoldersPage, HistoryPage, IntegrityPage, OverviewPage,
                     RansomwarePage, ScanPage, SettingsPage, human_int, progress_text)
 from .tr import _
-from .widgets import Card, IconLabel, Sparkline, icon, label
+from .widgets import Card, IconLabel, MatrixSidebar, Pulse, Sparkline, icon, label, logo_icon, logo_pixmap
 
 APP_ID = "io.github.lodarco.Lguard"
 AUTOSTART_SYSTEM = "/etc/xdg/autostart/lguard.desktop"
@@ -144,7 +144,7 @@ class MainWindow(QMainWindow):
         self.client = client
         self.on_hidden = None
         self.setWindowTitle("Lguard")
-        self.setWindowIcon(icon("shield-check", theme.current["accent"], 64))
+        self.setWindowIcon(logo_icon())
         self.resize(1200, 820)
         root = QWidget()
         h = QHBoxLayout(root)
@@ -152,16 +152,19 @@ class MainWindow(QMainWindow):
         h.setSpacing(0)
         self.setCentralWidget(root)
 
-        side = QFrame()
-        side.setObjectName("Sidebar")
+        side = MatrixSidebar()
         side.setFixedWidth(250)
         sv = QVBoxLayout(side)
         sv.setContentsMargins(6, 0, 6, 0)
         sv.setSpacing(2)
         brand = QHBoxLayout()
-        brand.setContentsMargins(8, 12, 8, 12)
-        brand.addWidget(IconLabel("shield-check", "success", 20))
-        brand.addWidget(label("Lguard", "SidebarTitle"), 1)
+        brand.setContentsMargins(8, 14, 8, 8)
+        mark = QLabel()
+        mark.setPixmap(logo_pixmap(84, full=True))        # shield, L and "guard": one picture
+        mark.setFixedSize(84, 84)
+        brand.addStretch(1)
+        brand.addWidget(mark)
+        brand.addStretch(1)
         sv.addLayout(brand)
 
         self.stack = QStackedWidget()
@@ -219,12 +222,15 @@ class MainWindow(QMainWindow):
         self.scan_btn = QPushButton(_("Scan now"))
         self.scan_btn.setObjectName("Suggested")
         sm = QMenu(self.scan_btn)
-        sm.addAction(_("Quick check (changed files)"), lambda: self.scan_now(False))
-        sm.addAction(_("Full disk scan (every file)"), lambda: self.scan_now(True))
+        self.quick_act = sm.addAction(_("Quick check (changed files)"), lambda: self.scan_now(False))
+        self.full_act = sm.addAction(_("Full disk scan (every file)"), lambda: self.scan_now(True))
         sm.addSeparator()
         sm.addAction(_("Scan a folder…"), lambda: self.show_page("scan"))
         self.scan_btn.setMenu(sm)
+        self.scan_pulse = Pulse(self.scan_btn)        # glows while a scan can be started
+        hh.addSpacing(8)
         hh.addWidget(self.scan_btn)
+        hh.addSpacing(8)
         menu_btn = QPushButton()
         menu_btn.setIcon(icon("menu", theme.current["ink"], 16))
         menu_btn.setFlat(True)
@@ -243,9 +249,26 @@ class MainWindow(QMainWindow):
         self.show_page("overview")
 
     def scan_now(self, full=False):
-        self.scan_btn.setEnabled(False)
+        # greyed at once, so a second click cannot start it twice
+        (self.full_act if full else self.quick_act).setEnabled(False)
+        if full:
+            self.quick_act.setEnabled(False)
+        self.scan_pulse.set_active(self.quick_act.isEnabled() or self.full_act.isEnabled())
         self.scan_btn.setText(_("Scanning…"))
         self.client.request("win.sweep", "start_sweep", full=full)
+
+    def set_scans(self, st):
+        """Grey out what is already running; glow while something can be started."""
+        sw = st.get("sweep") or {}
+        scans = st.get("scans") or {"quick": bool(sw.get("running")), "full": False}
+        full = bool(scans.get("full"))
+        quick = bool(scans.get("quick"))
+        self.full_act.setEnabled(not full)
+        self.quick_act.setEnabled(not quick and not full)      # a full scan covers the quick one
+        self.full_act.setText(_("Full disk scan (every file)") + (" – " + _("running") if full else ""))
+        self.quick_act.setText(_("Quick check (changed files)") + (" – " + _("running") if quick else ""))
+        self.scan_btn.setText(_("Scanning…") if (quick or full or sw.get("running")) else _("Scan now"))
+        self.scan_pulse.set_active(self.quick_act.isEnabled() or self.full_act.isEnabled())
 
     def set_categories(self, names):
         """Own categories from Folders get their own sidebar entry and page."""
@@ -284,8 +307,7 @@ class MainWindow(QMainWindow):
             self.scanning.setText(_("Scanning {pct}", pct=f"{pct}%" if pct is not None else "…"))
         else:
             self.scanning.setText("")
-        self.scan_btn.setEnabled(not running)
-        self.scan_btn.setText(_("Scanning…") if running else _("Scan now"))
+        self.set_scans(st)
         self.pages["overview"].on_result("app.status", st)
 
     def show_page(self, key):
@@ -321,8 +343,7 @@ class MainWindow(QMainWindow):
             self.pages["folders"].status.setText(msg)
             return
         if tag == "win.sweep":
-            self.scan_btn.setEnabled(True)
-            self.scan_btn.setText(_("Scan now"))
+            self.client.request("win.status", "status")      # show what is really running
         if "not authorized" in msg:
             return
         self.foot.setText(_("Lguard service is not running") if "not reachable" in msg else msg)
@@ -381,8 +402,9 @@ class LguardApp:
                                        triggered=lambda: self.client.request("tr.resume", "resume_sweep"))
             m.addAction(self.tray_pause)
             m.addAction(self.tray_resume)
-            m.addAction(QAction(_("Quick check now"), m,
-                                triggered=lambda: self.client.request("tr.sweep", "start_sweep")))
+            self.tray_quick = QAction(_("Quick check now"), m,
+                                      triggered=lambda: self.client.request("tr.sweep", "start_sweep"))
+            m.addAction(self.tray_quick)
             m.addAction(QAction(_("Scan a folder…"), m, triggered=lambda: self.open_main("scan")))
             m.addSeparator()
             m.addAction(QAction(_("Quit (protection keeps running)"), m, triggered=self.qapp.quit))
@@ -487,6 +509,8 @@ class LguardApp:
         paused = bool(sw.get("paused") or (st.get("sweep_control") or {}).get("paused"))
         self.tray_pause.setVisible(running and not paused)
         self.tray_resume.setVisible(running and paused)
+        scans = st.get("scans") or {"quick": running, "full": False}
+        self.tray_quick.setEnabled(not scans.get("quick") and not scans.get("full"))
 
     def on_event(self, ev):
         kind = ev.get("event")

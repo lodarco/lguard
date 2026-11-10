@@ -33,6 +33,126 @@ def icon_pixmap(name: str, color: str, size: int = 24, stroke: float = 2.0) -> Q
     return pm
 
 
+MARK_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c2c2e"/><stop offset="1" stop-color="#0a0a0b"/></linearGradient><linearGradient id="l" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fb3ff"/><stop offset="1" stop-color="#3d72d8"/></linearGradient><linearGradient id="r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f75f5f"/><stop offset="1" stop-color="#d93025"/></linearGradient></defs><path d="M64 7l49 18v35c0 29-20 52-49 60-29-8-49-31-49-60V25z" fill="url(#t)" stroke="url(#r)" stroke-width="7" stroke-linejoin="round"/><path d="M45 33h21v37h21v21H45z" fill="url(#l)" stroke="url(#l)" stroke-width="5" stroke-linejoin="round"/></svg>'''
+LOGO_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c2c2e"/><stop offset="1" stop-color="#0a0a0b"/></linearGradient><linearGradient id="l" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fb3ff"/><stop offset="1" stop-color="#3d72d8"/></linearGradient><linearGradient id="r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f75f5f"/><stop offset="1" stop-color="#d93025"/></linearGradient></defs><path d="M64 5l35 12.5v24.5c0 20.5-14.5 37-35 43-20.5-6-35-22.5-35-43V17.5z" fill="url(#t)" stroke="url(#r)" stroke-width="5.5" stroke-linejoin="round"/><path d="M51 23h14v26h15v14H51z" fill="url(#l)" stroke="url(#l)" stroke-width="4" stroke-linejoin="round"/><g fill="none" stroke="url(#r)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="26.5" cy="107.0" r="7.0"/><path d="M33.5 100.0V117.0a7.0 7.0 0 0 1 -12.0 4.5"/><path d="M39.5 100.0V107.0a7.0 7.0 0 0 0 14.0 0V100.0M53.5 100.0V114.0"/><circle cx="66.5" cy="107.0" r="7.0"/><path d="M73.5 100.0V114.0"/><path d="M79.5 100.0V114.0M79.5 107.0a7.0 7.0 0 0 1 9 -6.5"/><circle cx="101.5" cy="107.0" r="7.0"/><path d="M108.5 92.0V114.0"/></g></svg>'''
+
+
+def logo_pixmap(size: int = 24, full: bool | None = None) -> QPixmap:
+    """The Lguard logo, one picture: a red shield with a bold blue L, and
+    "guard" in thinner red letters under it. Below 40 px the word would be
+    unreadable, so small sizes show the shield with the L alone."""
+    if full is None:
+        full = size >= 40
+    ratio = 2
+    pm = QPixmap(size * ratio, size * ratio)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    QSvgRenderer(QByteArray((LOGO_SVG if full else MARK_SVG).encode())).render(p)
+    p.end()
+    pm.setDevicePixelRatio(ratio)
+    return pm
+
+
+def logo_icon() -> QIcon:
+    ic = QIcon()
+    for size in (16, 24, 32, 48, 64, 128):
+        ic.addPixmap(logo_pixmap(size))
+    return ic
+
+
+class Pulse:
+    """A soft glow that breathes around a widget: "this can be used now"."""
+
+    def __init__(self, widget, color_key: str = "accent"):
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        self.color_key = color_key
+        self.fx = QGraphicsDropShadowEffect(widget)
+        self.fx.setOffset(0, 0)
+        widget.setGraphicsEffect(self.fx)
+        self.anim = QVariantAnimation(widget)
+        self.anim.setDuration(1800)
+        self.anim.setStartValue(0.0)
+        self.anim.setKeyValueAt(0.5, 1.0)
+        self.anim.setEndValue(0.0)
+        self.anim.setEasingCurve(QEasingCurve.InOutSine)
+        self.anim.setLoopCount(-1)
+        self.anim.valueChanged.connect(self._step)
+        self.set_active(False)
+
+    def _step(self, v):
+        col = QColor(theme.current[self.color_key])
+        col.setAlpha(int(70 + 170 * float(v)))
+        self.fx.setColor(col)
+        self.fx.setBlurRadius(6 + 16 * float(v))
+
+    def set_active(self, on: bool):
+        if on and self.anim.state() != self.anim.State.Running:
+            self.fx.setEnabled(True)
+            self.anim.start()
+        elif not on:
+            self.anim.stop()
+            self.fx.setEnabled(False)
+
+
+class MatrixSidebar(QFrame):
+    """The sidebar, with a faint red "digital rain" behind the navigation:
+    columns of characters that fade towards their tail. It is a still
+    picture (the same on every start), drawn once per size and theme."""
+
+    CHARS = "01<>/\\{}[]#$%&*+=:;LGUARD0123456789"
+    CELL_W, CELL_H = 14, 15
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("Sidebar")
+        self._cache = None
+        self._key = None
+
+    def _rain(self) -> QPixmap:
+        import random
+        ratio = self.devicePixelRatioF()
+        pm = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
+        pm.setDevicePixelRatio(ratio)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        f = QFont(theme.MONO)
+        f.setStyleHint(QFont.Monospace)
+        f.setPixelSize(12)
+        f.setBold(True)
+        p.setFont(f)
+        rnd = random.Random(7)                     # fixed: the same picture every time
+        dark = theme.is_dark()
+        peak = 46 if dark else 30                  # alpha of the brightest character (of 255)
+        red = (255, 64, 64) if dark else (200, 30, 30)
+        rows = self.height() // self.CELL_H + 1
+        for col in range(self.width() // self.CELL_W + 1):
+            x = col * self.CELL_W + 2
+            y = rnd.randrange(-rows, rows)
+            while y < rows:
+                length = rnd.randrange(5, 18)
+                for i in range(length):
+                    row = y + i
+                    if 0 <= row < rows:
+                        # tail fades in from nothing, the last character is the brightest
+                        a = int(peak * ((i + 1) / length) ** 1.6)
+                        p.setPen(QColor(*red, a if i < length - 1 else min(255, int(peak * 1.7))))
+                        p.drawText(x, row * self.CELL_H + 12, rnd.choice(self.CHARS))
+                y += length + rnd.randrange(3, 14)
+        p.end()
+        return pm
+
+    def paintEvent(self, ev):
+        super().paintEvent(ev)                     # the themed background and border
+        key = (self.width(), self.height(), theme.is_dark())
+        if key != self._key:
+            self._key, self._cache = key, self._rain()
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._cache)
+        p.end()
+
+
 def icon(name: str, color: str, size: int = 24) -> QIcon:
     return QIcon(icon_pixmap(name, color, size))
 

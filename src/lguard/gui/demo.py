@@ -29,7 +29,7 @@ class Demo:
                 "files": 1842317, "counts": {"files": 1842317, "bytes": 1.52e12, "clean": 1842315},
                 "last_sweep": NOW - 14 * 3600, "frozen": self.frozen, "quarantine": len(self.quarantine),
                 "key": "sealed (systemd-creds)", "history": {"entries": 4812, "head": "7e1c4f02a90b11d2"},
-                "version": "demo", "stopped": [], "rename_events": True,
+                "version": "demo", "scans": {"quick": True, "full": False}, "stopped": [], "rename_events": True,
                 "categories": {"downloads": ["/srv/media/downloads", "/home/alex/Downloads"], "plex": ["/srv/media"],
                                "jellyfin": ["/srv/media"], "Work": ["/home/alex/Work"]},
                 "verify": {"percent": 64}, "queue": 0, "current": [], "stats": {"scanned": 4116},

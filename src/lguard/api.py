@@ -116,7 +116,7 @@ class Api:
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         srv.bind(SOCKET_PATH)
         os.chmod(SOCKET_PATH, 0o666)            # who may do what is decided per call
-        srv.listen(16)
+        srv.listen(64)
         srv.settimeout(1.0)
         while not stop.is_set():
             try:
@@ -233,6 +233,7 @@ class Api:
         seq, head = idx.ledger_head()
         return {
             "version": __version__,
+            "scans": self.scans_active(),
             "stopped": idx.meta_get("stopped") or [],
             "rename_events": bool(d and d.names is not None),
             "category_modes": {k: self.cfg.mode_of(v[0]) if v else "downloads"
@@ -265,13 +266,34 @@ class Api:
                 p["running"] = False        # the process died without saying so
         return p
 
+    def scans_active(self) -> dict:
+        """Which scans are running or waiting their turn (asked at most
+        every two seconds)."""
+        now = time.time()
+        cached = getattr(self, "_scans", None)
+        if cached and now - cached[0] < 2:
+            return cached[1]
+        try:
+            out = subprocess.run(["systemctl", "is-active", "lguard-sweep.service", "lguard-fullscan.service"],
+                                 capture_output=True, text=True, timeout=10).stdout.split()
+        except (OSError, subprocess.TimeoutExpired):
+            out = []
+        out += ["unknown"] * 2
+        res = {"quick": out[0] in ("active", "activating"), "full": out[1] in ("active", "activating")}
+        self._scans = (now, res)
+        return res
+
     def m_start_sweep(self, idx, uid, full: bool = False):
         """"Scan now": quick check of everything that changed (first time: all),
         or full=True: the full disk scan - every file read and checked again."""
         unit = "lguard-fullscan.service" if full else "lguard-sweep.service"
-        state = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True).stdout.strip()
-        if state in ("active", "activating"):
+        self._scans = None
+        active = self.scans_active()
+        # never the same scan twice; and a quick check while the full disk
+        # scan runs would have nothing left to do
+        if active["full"] or (active["quick"] and not full):
             return {"started": unit, "already": True}
+        self._scans = None
         w = self._write_index()
         try:
             w.meta_set("sweep_control", {"paused": False})

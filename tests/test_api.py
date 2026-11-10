@@ -38,6 +38,30 @@ class Policy(unittest.TestCase):
             self.assertLessEqual(r["resume_at"], time.time() + 86400 + 5)
         self.assertLessEqual(self.api.m_pause_sweep(self.idx, 1000, 30)["resume_at"], time.time() + 1805)
 
+    def test_a_running_scan_is_not_started_twice(self):
+        started = []
+        real = api_mod.subprocess.run
+
+        def fake(cmd, **kw):
+            if cmd[:2] == ["systemctl", "start"]:
+                started.append(cmd[-1])
+            class R:
+                returncode, stdout, stderr = 0, self.state, ""
+            return R()
+        api_mod.subprocess.run = fake
+        try:
+            self.state = "inactive\ninactive\n"
+            self.assertNotIn("already", self.api.m_start_sweep(self.idx, 1000, full=False))
+            self.state = "activating\ninactive\n"                 # quick check running
+            self.assertTrue(self.api.m_start_sweep(self.idx, 1000, full=False)["already"])
+            self.assertNotIn("already", self.api.m_start_sweep(self.idx, 1000, full=True))   # full may queue
+            self.state = "inactive\nactivating\n"                 # full disk scan running
+            self.assertTrue(self.api.m_start_sweep(self.idx, 1000, full=True)["already"])
+            self.assertTrue(self.api.m_start_sweep(self.idx, 1000, full=False)["already"])
+            self.assertEqual(started, ["lguard-sweep.service", "lguard-fullscan.service"])
+        finally:
+            api_mod.subprocess.run = real
+
     def test_folders_reject_what_would_break_the_config(self):
         for bad in ("relative/path", "/srv/a\rb", "/srv/a\x00b"):
             with self.assertRaises(ValueError):
@@ -115,6 +139,7 @@ class Server(unittest.TestCase):
                 s.settimeout(3)
                 s.connect(self.sock)
                 held.append(s)
+                time.sleep(0.02)
             time.sleep(0.5)
             self.assertLessEqual(sum(self.api.connections.values()), api_mod.MAX_PER_USER)
         finally:

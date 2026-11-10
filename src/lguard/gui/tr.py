@@ -163,6 +163,7 @@ DE = {
     "Folders with your documents and photos. Lguard raises the alarm when files here get encrypted.": "Ordner mit Ihren Dokumenten und Fotos. Lguard schlägt Alarm, wenn Dateien hier verschlüsselt werden.",
     "Media library – programs are quarantined": "Medienbibliothek – Programme kommen in Quarantäne",
     "Downloads – programs are allowed": "Downloads – Programme sind erlaubt",
+    "running": "läuft",
 }
 ES = {
     "Overview": "Resumen", "Findings & quarantine": "Hallazgos y cuarentena", "Media": "Multimedia",
@@ -320,6 +321,7 @@ ES = {
     "Folders with your documents and photos. Lguard raises the alarm when files here get encrypted.": "Carpetas con tus documentos y fotos. Lguard da la alarma cuando los archivos de aquí se cifran.",
     "Media library – programs are quarantined": "Biblioteca multimedia: los programas van a cuarentena",
     "Downloads – programs are allowed": "Descargas: se permiten programas",
+    "running": "en curso",
 }
 EN = {
     "stopped_explain": "Lguard suspended the program that was changing your files. It is not closed: if you know and trust it, let it continue.",
