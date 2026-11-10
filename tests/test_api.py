@@ -101,7 +101,7 @@ class Server(unittest.TestCase):
 
     def setUp(self):
         self.top, self.cfg, self.idx = util.sandbox()
-        self.sock = os.path.join(tempfile.mkdtemp(), "api.sock")
+        self.sock = os.path.join(util.tmpdir(), "api.sock")
         self._old = api_mod.SOCKET_PATH, api_mod.authorized
         api_mod.SOCKET_PATH = self.sock
         self.allowed = True

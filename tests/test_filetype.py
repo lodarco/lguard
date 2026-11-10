@@ -2,12 +2,12 @@ import os
 import tempfile
 import unittest
 
-import util  # noqa: F401
+import util
 from lguard import filetype as ft
 
 
 def verdict(name, data, mode):
-    d = tempfile.mkdtemp()
+    d = util.tmpdir()
     p = util.write(os.path.join(d, name), data)
     fd = os.open(p, os.O_RDONLY)
     try:

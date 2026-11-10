@@ -28,12 +28,12 @@ class Scanning(unittest.TestCase):
         self.assertFalse(self.sc.scan(p).cached)
 
     def test_threat_is_quarantined_and_logged(self):
-        p = util.write(os.path.join(self.home, "eicar.com"), util.EICAR)
+        p = util.write(os.path.join(self.home, "threat.bin"), util.THREAT)
         r = self.sc.scan(p)
         self.assertEqual((r.verdict, r.action), ("infected", "quarantined"))
         self.assertFalse(os.path.exists(p))
         self.assertEqual(len(quarantine.entries(self.cfg)), 1)
-        self.assertEqual(self.idx.findings()[0]["signature"], "Eicar-Test-Signature")
+        self.assertEqual(self.idx.findings()[0]["signature"], "Test.Threat")
 
     def test_same_content_elsewhere_is_not_scanned_twice(self):
         a = util.write(os.path.join(self.home, "a.jpg"), b"\xff\xd8\xff" + b"photo" * 100)
@@ -43,8 +43,8 @@ class Scanning(unittest.TestCase):
         self.assertEqual(self.clamd.scans, 1)
 
     def test_cache_data_is_skipped_but_a_program_in_a_cache_is_not(self):
-        data = util.write(os.path.join(self.home, "u", ".cache", "thumb.bin"), util.EICAR)
-        prog = util.write(os.path.join(self.home, "u", ".cache", "updater"), b"\x7fELF" + util.EICAR)
+        data = util.write(os.path.join(self.home, "u", ".cache", "thumb.bin"), util.THREAT)
+        prog = util.write(os.path.join(self.home, "u", ".cache", "updater"), b"\x7fELF" + util.THREAT)
         self.assertEqual(self.sc.scan(data).verdict, "skipped")
         self.assertEqual(self.sc.scan(prog).verdict, "infected")
 
@@ -102,7 +102,7 @@ class Scanning(unittest.TestCase):
         self.assertEqual(self.idx.get(p).db_version, self.clamd.dbver)
 
     def test_full_disk_scan_finds_what_new_signatures_know(self):
-        p = util.write(os.path.join(self.home, "doc.jpg"), b"\xff\xd8\xff" + util.EICAR)
+        p = util.write(os.path.join(self.home, "doc.jpg"), b"\xff\xd8\xff" + util.THREAT)
         real, self.clamd._judge = self.clamd._judge, lambda data: util.ClamResult(False, None, "")
         self.assertEqual(self.sc.scan(p).verdict, "clean")        # not known yet
         self.clamd._judge = real

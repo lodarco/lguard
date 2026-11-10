@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-import util  # noqa: F401
+import util
 from lguard import config
 
 
@@ -34,7 +34,7 @@ class Categories(unittest.TestCase):
         self.assertEqual(c.mode_of("/srv/films/a.exe"), "media")
 
     def test_old_name_is_still_read(self):
-        d = tempfile.mkdtemp()
+        d = util.tmpdir()
         main = os.path.join(d, "lguard.toml")
         with open(main, "w") as f:
             f.write('categories = { torrents = ["/srv/t"], plex = ["/srv/p"] }\n')
@@ -44,7 +44,7 @@ class Categories(unittest.TestCase):
 
 class AppSettings(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp()
+        self.dir = util.tmpdir()
         self.main = os.path.join(self.dir, "lguard.toml")
         open(self.main, "w").close()
 
