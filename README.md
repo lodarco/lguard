@@ -82,7 +82,8 @@ starts encrypting your files.
   copies, and a program that is not part of the operating system is suspended
   until you decide (`lguard resume-process`, or the button in the app).
 - **Quarantine** with restore, restore-and-trust and delete. Trust can be
-  taken back.
+  taken back. An administrator password entered in the app holds for five
+  minutes.
 - **Sealed inventory**: every record is encrypted and authenticated
   (AES-256-GCM, blind HMAC index) and the scan history is a hash chain. The
   key is sealed with `systemd-creds`, bound to the TPM 2.0 chip when the

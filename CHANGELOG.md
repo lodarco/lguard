@@ -50,6 +50,11 @@ Changed
 - App: new look (neutral dark with a steel sheen, clean light theme, one blue
   accent) with the Inter and Cascadia Mono fonts bundled, so it looks the same
   on every desktop.
+- An administrator password entered in the app holds for five minutes (for
+  that app window only), instead of being asked for every single action.
+- App: the scan button and the progress bar show what is really happening:
+  the bar moves only while something is scanned, a running scan is greyed out
+  and cannot be started twice. New About page; the header menu is gone.
 - App: trust can be removed; folders protected by the ransomware shield and
   the mode of each category can be set; no double notifications.
 - Daily counters are written in batches (one write every few seconds instead

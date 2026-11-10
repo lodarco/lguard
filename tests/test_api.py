@@ -62,6 +62,30 @@ class Policy(unittest.TestCase):
         finally:
             api_mod.subprocess.run = real
 
+    def test_password_holds_five_minutes_for_the_same_program_only(self):
+        asked = []
+        real_auth, real_start = api_mod.authorized, api_mod._start_time
+        api_mod.authorized = lambda action, pid, uid, interactive: asked.append((action, pid)) or True
+        api_mod._start_time = lambda pid: f"start-of-{pid}"
+        try:
+            for _ in range(3):
+                self.assertTrue(self.api.authorize(api_mod.MANAGE, 500, 1000))
+            self.assertEqual(len(asked), 1)                       # asked once, kept for the next ones
+            self.assertTrue(self.api.authorize(api_mod.MANAGE, 501, 1000))
+            self.assertEqual(len(asked), 2)                       # another program of the same user: asked
+            api_mod._start_time = lambda pid: "a-later-process-with-the-same-pid"
+            self.api.authorize(api_mod.MANAGE, 500, 1000)
+            self.assertEqual(len(asked), 3)                       # pid reused: asked
+            self.api.manage_ok = {k: 0 for k in self.api.manage_ok}
+            self.api.authorize(api_mod.MANAGE, 500, 1000)
+            self.assertEqual(len(asked), 4)                       # time is up: asked
+            api_mod.authorized = lambda *a, **k: False
+            self.api.manage_ok = {}
+            self.assertFalse(self.api.authorize(api_mod.MANAGE, 500, 1000))
+            self.assertEqual(self.api.manage_ok, {})              # a refusal is never remembered
+        finally:
+            api_mod.authorized, api_mod._start_time = real_auth, real_start
+
     def test_folders_reject_what_would_break_the_config(self):
         for bad in ("relative/path", "/srv/a\rb", "/srv/a\x00b"):
             with self.assertRaises(ValueError):

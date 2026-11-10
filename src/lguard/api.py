@@ -45,6 +45,7 @@ MAX_LINE = 64 * 1024
 MAX_CONNECTIONS = 64
 MAX_PER_USER = 16
 MAX_PAUSE_MIN = 24 * 60
+MANAGE_KEEP_S = 300        # an entered administrator password holds this long, for the same program
 
 
 def _peer(conn: socket.socket):
@@ -85,6 +86,29 @@ class Api:
         """Users whose app is connected right now."""
         with self.lock:
             return {uid for _q, uid in self.subscribers}
+
+    def authorize(self, action: str, pid: int, uid: int) -> bool:
+        """Ask polkit. An administrator password entered for one change
+        holds for five minutes, so restoring or deleting several files does
+        not ask each time - but only for the very program that asked (same
+        process, identified by pid and start time), never for another
+        program of the same user."""
+        if action != MANAGE or uid == 0:
+            return authorized(action, pid, uid, interactive=action == MANAGE)
+        try:
+            who = (uid, pid, _start_time(pid))
+        except (OSError, IndexError):
+            return False
+        now = time.time()
+        with self.lock:
+            self.manage_ok = {k: t for k, t in getattr(self, "manage_ok", {}).items() if t > now}
+            if who in self.manage_ok:
+                return True
+        ok = authorized(action, pid, uid, interactive=True)
+        if ok:
+            with self.lock:
+                self.manage_ok[who] = time.time() + MANAGE_KEEP_S
+        return ok
 
     def need(self, method: str, params: dict) -> str:
         if method == "pause_sweep":
@@ -160,7 +184,7 @@ class Api:
                     ok = True
                 else:
                     conn.settimeout(600)              # the password dialog may be open
-                    ok = authorized(need, pid, uid, interactive=need == MANAGE)
+                    ok = self.authorize(need, pid, uid)
                     if ok and need == VIEW:
                         view_ok_until = time.time() + 60
                 if not ok:
