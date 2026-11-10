@@ -13,7 +13,7 @@ import shutil
 import sys
 
 from PySide6.QtCore import QObject, QProcess, QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtGui import QIcon, QAction, QGuiApplication
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QPushButton,
                                QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -220,7 +220,8 @@ class MainWindow(QMainWindow):
         self.scanning = label("", "Dim")
         hh.addWidget(self.scanning)
         self.scan_btn = QPushButton(_("Scan now"))
-        self.scan_btn.setObjectName("Suggested")
+        self.scan_btn.setObjectName("Scan")              # the logo as a button: dark tile, red edge, blue letters
+        self.scan_btn.setIcon(QIcon(logo_pixmap(18, full=False)))
         sm = QMenu(self.scan_btn)
         self.quick_act = sm.addAction(_("Quick check (changed files)"), lambda: self.scan_now(False))
         self.full_act = sm.addAction(_("Full disk scan (every file)"), lambda: self.scan_now(True))

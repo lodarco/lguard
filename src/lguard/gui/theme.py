@@ -48,6 +48,9 @@ SURFACES = {
         danger_hover=_GRAD.format("stop:0 #ff8080, stop:1 #e14b4b"),
         danger_edge="#d93025",
         on_accent="#ffffff",
+        scan=_GRAD.format("stop:0 #2c2c2e, stop:1 #0a0a0b"), scan_hover=_GRAD.format("stop:0 #38383a, stop:1 #151517"),
+        scan_edge=_GRAD.format("stop:0 #f75f5f, stop:1 #d93025"), scan_edge_hover="#ff8080",
+        scan_text="#7fb3ff", scan_text_hover="#a3c8ff",
     ),
     "light": dict(side="#ffffff", header="#ffffff", header_edge="#dfe3eb", card="#ffffff",
                   btn=_GRAD.format("stop:0 #ffffff, stop:1 #f0f2f6"),
@@ -59,7 +62,11 @@ SURFACES = {
                   danger=_GRAD.format("stop:0 #e5483d, stop:1 #c5221f"),
                   danger_hover=_GRAD.format("stop:0 #f0584d, stop:1 #d93025"),
                   danger_edge="#c5221f",
-                  on_accent="#ffffff"),
+                  on_accent="#ffffff",
+                  scan=_GRAD.format("stop:0 #2c2c2e, stop:1 #0a0a0b"),
+                  scan_hover=_GRAD.format("stop:0 #38383a, stop:1 #151517"),
+                  scan_edge=_GRAD.format("stop:0 #f75f5f, stop:1 #d93025"), scan_edge_hover="#ff8080",
+                  scan_text="#7fb3ff", scan_text_hover="#a3c8ff"),
 }
 
 SANS = "Inter Variable"
@@ -183,6 +190,10 @@ def stylesheet() -> str:
     QPushButton#Suggested {{ background: {g['primary']}; border: 1px solid {g['primary_edge']};
                              color: {g['on_accent']}; font-weight: 700; padding: 6px 18px; }}
     QPushButton#Suggested:hover {{ background: {g['primary_hover']}; border-color: {g['primary_edge']}; }}
+    QPushButton#Scan {{ background: {g['scan']}; border: 2px solid {g['scan_edge']}; border-radius: 9px;
+                        color: {g['scan_text']}; font-weight: 800; font-size: 14px; padding: 5px 20px 5px 12px; }}
+    QPushButton#Scan:hover {{ background: {g['scan_hover']}; border-color: {g['scan_edge_hover']};
+                              color: {g['scan_text_hover']}; }}
     QPushButton#Destructive {{ background: {g['danger']}; border: 1px solid {g['danger_edge']}; color: #ffffff;
                                font-weight: 700; }}
     QPushButton#Destructive:hover {{ background: {g['danger_hover']}; border-color: {g['danger_edge']}; }}
