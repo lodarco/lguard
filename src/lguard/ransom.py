@@ -62,8 +62,12 @@ class RansomDetector:
                           path=self.suspects[-1][1], proc=procs, frozen="{frozen}"), procs)
             return
 
-        # An existing file (one we had indexed) being rewritten.
-        if proc and not self._ignored(proc) and self.index.get(path) is not None:
+        # An existing file (one we had indexed) rewritten with content that
+        # looks encrypted. Plain rewrites do not count: unpacking archives,
+        # git checkouts, builds and package installs rewrite thousands of
+        # files with ordinary content all the time.
+        if (proc and not self._ignored(proc) and self.index.get(path) is not None
+                and filetype.looks_random(head)):
             q = self.rewrites[proc]
             q.append(now)
             while q and q[0] < now - cfg.ransom_rewrite_window_s:
@@ -78,9 +82,9 @@ class RansomDetector:
         if now - self.last_alarm < COOLDOWN_S:
             return
         self.last_alarm = now
-        self.index.event("ransom_alarm", body)
         frozen = is_frozen(self.index) or freeze(self.cfg, self.index, f"ransomware alarm ({proc})", self.log)
         body = body.replace("{frozen}", t("frozen") if frozen else t("not_frozen"))
+        self.index.event("ransom_alarm", body)
         self.index.commit()
         notify(self.cfg, t("ransom_title"), body, "urgent")
         if self.on_alarm:

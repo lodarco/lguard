@@ -187,3 +187,19 @@ def looks_encrypted(path: str, head: bytes) -> bool:
     if kind(head) in expected:
         return False
     return entropy(head) > 7.5
+
+
+# Formats whose content is compressed by nature: high entropy is normal there.
+NATURALLY_DENSE = {"zip", "gzip", "xz", "bzip2", "zstd", "7z", "rar", "jpeg", "png", "gif", "webp",
+                   "mp4", "ebml", "asf", "flv", "avi", "ogg", "flac", "id3", "mpeg-audio", "pdf",
+                   "ole", "sqlite", "mpeg-ts", "mpeg-ps"}
+
+
+def looks_random(head: bytes) -> bool:
+    """Content that is near-random and not a format that is compressed by
+    nature: what a file looks like after ransomware encrypted it."""
+    if len(head) < 4096:
+        return False
+    if kind(head) in NATURALLY_DENSE:
+        return False
+    return entropy(head) > 7.5
