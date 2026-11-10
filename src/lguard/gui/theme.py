@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalett
 LIGHT = dict(
     win="#f5f7fa", side="#ffffff", header="#ffffff", view="#f5f7fa", card="#ffffff",
     card_edge="#dfe3eb", ink="#202124", dim="#5f6368", sep="#dfe3eb",
-    row_sel="rgba(61,114,216,0.10)", row_hover="#f0f2f6", btn="#f0f2f6", btn_hover="#e6e9ef", btn_edge="#cfd5e1",
+    row_sel="rgba(61,114,216,0.10)", sel_solid="#dfe9fb", faint="#a6abb3", row_hover="#f0f2f6", btn="#f0f2f6", btn_hover="#e6e9ef", btn_edge="#cfd5e1",
     accent="#3d72d8", accent_edge="rgba(61,114,216,0.40)", accent_hover="#3363c2", accent_text="#3d72d8", success="#188038", warning="#8a6200",
     destructive="#d93025", destructive_hover="#b3261e", destructive_text="#d93025",
     logo_blue="#3d72d8", logo_blue_hi="#7fb3ff", logo_red="#d93025",
@@ -22,7 +22,7 @@ LIGHT = dict(
 DARK = dict(
     win="#0a0a0b", side="#1c1c1e", header="#1c1c1e", view="#0a0a0b", card="#1c1c1e",
     card_edge="#38383a", ink="#e8e8ea", dim="#a1a1a6", sep="#38383a",
-    row_sel="rgba(90,155,255,0.18)", row_hover="rgba(255,255,255,0.05)", btn="#2c2c2e", btn_hover="#38383a",
+    row_sel="rgba(90,155,255,0.18)", sel_solid="#263650", faint="#6a6a70", row_hover="rgba(255,255,255,0.05)", btn="#2c2c2e", btn_hover="#38383a",
     btn_edge="#48484a",
     accent="#5a9bff", accent_edge="rgba(90,155,255,0.45)", accent_hover="#7fb3ff", accent_text="#5a9bff", success="#3ecf6e", warning="#f7c948",
     destructive="#e14b4b", destructive_hover="#f75f5f", destructive_text="#f75f5f",
@@ -209,13 +209,19 @@ def stylesheet() -> str:
     QCheckBox::indicator:checked {{ background: {c['accent']}; }}
     QComboBox {{ background: {g['btn']}; border: 1px solid {g['btn_edge']}; border-radius: 7px; padding: 5px 10px; }}
     QComboBox:hover {{ border-color: {g['btn_edge_hover']}; }}
+    QComboBox {{ combobox-popup: 0; }}
     QComboBox::drop-down {{ border: none; width: 24px; }}
     QComboBox::down-arrow {{ image: url({_arrow(c['dim'])}); width: 12px; height: 12px; }}
-    QComboBox QAbstractItemView {{ background: {c['card']}; border: 1px solid {c['card_edge']};
-                                   selection-background-color: {c['accent']}; selection-color: #ffffff; }}
+    QComboBox QAbstractItemView {{ background: {c['card']}; color: {c['ink']}; border: 1px solid {c['card_edge']};
+                                   outline: none; padding: 4px; selection-background-color: {c['sel_solid']};
+                                   selection-color: {c['ink']}; }}
+    QComboBox QAbstractItemView::item {{ min-height: 30px; color: {c['ink']}; }}
+    QComboBox QAbstractItemView::item:selected, QComboBox QAbstractItemView::item:hover {{
+        background: {c['sel_solid']}; color: {c['ink']}; }}
     QMenu {{ background: {c['card']}; border: 1px solid {c['card_edge']}; padding: 4px; }}
     QMenu::item {{ padding: 6px 18px; border-radius: 4px; }}
-    QMenu::item:selected {{ background: {c['row_sel']}; color: {c['ink']}; }}
+    QMenu::item:selected {{ background: {c['sel_solid']}; color: {c['ink']}; }}
+    QMenu::item:disabled {{ color: {c['faint']}; background: transparent; }}
     QProgressBar {{ background: {c['track']}; border: none; border-radius: 4px; }}
     QProgressBar::chunk {{ background: {c['accent']}; border-radius: 4px; }}
     QTableWidget {{ background: transparent; border: none; gridline-color: transparent; }}
