@@ -865,6 +865,7 @@ class FoldersPage(Page):
             lb.setStyleSheet(theme.MONO_CSS)
             r.addWidget(lb, 1)
             x = QPushButton("✕")
+            x.setObjectName("Mini")
             x.setToolTip(_("Remove"))
             x.setFixedWidth(34)
             x.clicked.connect(lambda _c=False, path=p: self.remove(key, path))

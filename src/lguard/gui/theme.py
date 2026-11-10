@@ -14,7 +14,7 @@ LIGHT = dict(
     win="#f5f7fa", side="#ffffff", header="#ffffff", view="#f5f7fa", card="#ffffff",
     card_edge="#dfe3eb", ink="#202124", dim="#5f6368", sep="#dfe3eb",
     row_sel="rgba(61,114,216,0.10)", row_hover="#f0f2f6", btn="#f0f2f6", btn_hover="#e6e9ef", btn_edge="#cfd5e1",
-    accent="#3d72d8", accent_hover="#3363c2", accent_text="#3d72d8", success="#188038", warning="#8a6200",
+    accent="#3d72d8", accent_edge="rgba(61,114,216,0.40)", accent_hover="#3363c2", accent_text="#3d72d8", success="#188038", warning="#8a6200",
     destructive="#d93025", destructive_hover="#b3261e", destructive_text="#d93025",
     bar="#9db8ec", bar_now="#3d72d8", track="#e6e9ef", toast="#ffffff",
 )
@@ -23,7 +23,7 @@ DARK = dict(
     card_edge="#38383a", ink="#e8e8ea", dim="#a1a1a6", sep="#38383a",
     row_sel="rgba(90,155,255,0.18)", row_hover="rgba(255,255,255,0.05)", btn="#2c2c2e", btn_hover="#38383a",
     btn_edge="#48484a",
-    accent="#5a9bff", accent_hover="#7fb3ff", accent_text="#5a9bff", success="#3ecf6e", warning="#f7c948",
+    accent="#5a9bff", accent_edge="rgba(90,155,255,0.45)", accent_hover="#7fb3ff", accent_text="#5a9bff", success="#3ecf6e", warning="#f7c948",
     destructive="#e14b4b", destructive_hover="#f75f5f", destructive_text="#f75f5f",
     bar="#3f6fbf", bar_now="#7fb3ff", track="#2c2c2e", toast="#1c1c1e",
 )
@@ -36,12 +36,30 @@ SURFACES = {
         header=_GRAD.format("stop:0 #242426, stop:0.5 #1c1c1e, stop:1 #111113"),
         header_edge="#000000",
         card=_GRAD.format("stop:0 #242426, stop:1 #1c1c1e"),
-        btn=_GRAD.format("stop:0 #38383a, stop:1 #242426"),
-        btn_hover=_GRAD.format("stop:0 #48484a, stop:1 #2c2c2e"),
+        # buttons are cut from the logo: the shield's dark tile with its red
+        # edge, the L's blue for the main action, the shield's red for danger
+        btn=_GRAD.format("stop:0 #2c2c2e, stop:1 #0f0f10"),
+        btn_hover=_GRAD.format("stop:0 #38383a, stop:1 #1c1c1e"),
+        btn_edge="rgba(247,95,95,0.38)", btn_edge_hover="#f75f5f",
+        primary=_GRAD.format("stop:0 #7fb3ff, stop:1 #3d72d8"),
+        primary_hover=_GRAD.format("stop:0 #a3c8ff, stop:1 #5a8be6"),
+        primary_edge="#3d72d8",
+        danger=_GRAD.format("stop:0 #f75f5f, stop:1 #d93025"),
+        danger_hover=_GRAD.format("stop:0 #ff8080, stop:1 #e14b4b"),
+        danger_edge="#d93025",
         on_accent="#ffffff",
     ),
     "light": dict(side="#ffffff", header="#ffffff", header_edge="#dfe3eb", card="#ffffff",
-                  btn="#f0f2f6", btn_hover="#e6e9ef", on_accent="#ffffff"),
+                  btn=_GRAD.format("stop:0 #ffffff, stop:1 #f0f2f6"),
+                  btn_hover=_GRAD.format("stop:0 #ffffff, stop:1 #e6e9ef"),
+                  btn_edge="rgba(217,48,37,0.40)", btn_edge_hover="#d93025",
+                  primary=_GRAD.format("stop:0 #5a8be6, stop:1 #3363c2"),
+                  primary_hover=_GRAD.format("stop:0 #6f9bee, stop:1 #3d72d8"),
+                  primary_edge="#3363c2",
+                  danger=_GRAD.format("stop:0 #e5483d, stop:1 #c5221f"),
+                  danger_hover=_GRAD.format("stop:0 #f0584d, stop:1 #d93025"),
+                  danger_edge="#c5221f",
+                  on_accent="#ffffff"),
 }
 
 SANS = "Inter Variable"
@@ -114,6 +132,20 @@ def apply(app, mode: str | None = None):
     app.setStyleSheet(stylesheet())
 
 
+def _arrow(color: str) -> str:
+    """A small down arrow in the text colour, as a file the stylesheet can
+    point to (a styled combo box loses the one Qt draws)."""
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), f"lguard-arrow-{os.getuid()}-{color.lstrip('#')}.svg")
+    try:
+        with open(path, "w") as f:
+            f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5" '
+                    f'fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+    except OSError:
+        return ""
+    return path
+
+
 def stylesheet() -> str:
     c = current
     g = SURFACES["dark" if is_dark() else "light"]
@@ -123,10 +155,11 @@ def stylesheet() -> str:
     #SidebarTitle {{ font-weight: 700; font-size: 15px; padding: 0 6px; }}
     #SidebarSection {{ color: {c['dim']}; font-size: 11px; font-weight: 700; padding: 14px 12px 3px 12px; }}
     #SidebarFoot {{ color: {c['dim']}; font-size: 12px; padding: 8px 14px 12px 14px; }}
-    QPushButton#Nav {{ text-align: left; padding: 7px 12px; border: 1px solid transparent; border-radius: 5px;
+    QPushButton#Nav {{ text-align: left; padding: 7px 12px; border: 1px solid transparent; border-radius: 7px;
                        background: transparent; font-size: 14px; font-weight: 500; }}
-    QPushButton#Nav:hover {{ background: {c['row_hover']}; }}
-    QPushButton#Nav:checked {{ background: {c['row_sel']}; color: {c['accent_text']}; font-weight: 600; }}
+    QPushButton#Nav:hover {{ background: {c['row_hover']}; border-color: transparent; }}
+    QPushButton#Nav:checked {{ background: {c['row_sel']}; color: {c['accent_text']}; font-weight: 600;
+                               border: 1px solid {c['accent_edge']}; }}
     #HeaderBar {{ background: {g['header']}; border-bottom: 1px solid {g['header_edge']}; }}
     #HeaderTitle {{ font-weight: 700; font-size: 15px; }}
     #Content {{ background: {c['view']}; }}
@@ -141,23 +174,30 @@ def stylesheet() -> str:
               font-size: 12px; font-weight: 700; }}
     #StatBox {{ background: {c['btn']}; border: 1px solid {c['card_edge']}; border-radius: 8px; }}
     QHeaderView::section:horizontal {{ qproperty-defaultAlignment: AlignLeft; }}
-    QPushButton {{ background: {g['btn']}; border: 1px solid {c['btn_edge']}; border-radius: 5px;
-                   padding: 6px 14px; font-weight: 600; color: {c['ink']}; }}
-    QPushButton:hover {{ background: {g['btn_hover']}; border-color: {c['accent']}; }}
-    QPushButton:disabled {{ color: {c['dim']}; }}
-    QPushButton#Suggested {{ background: {c['accent']}; border: 1px solid {c['accent']};
-                             color: {g['on_accent']}; font-weight: 700; }}
-    QPushButton#Suggested:hover {{ background: {c['accent_hover']}; border-color: {c['accent_hover']}; }}
-    QPushButton#Destructive {{ background: {c['destructive']}; border: 1px solid {c['destructive']}; color: #ffffff; }}
-    QPushButton#Destructive:hover {{ background: {c['destructive_hover']}; border-color: {c['destructive_hover']}; }}
+    QPushButton {{ background: {g['btn']}; border: 1px solid {g['btn_edge']}; border-radius: 7px;
+                   padding: 6px 15px; font-weight: 600; color: {c['ink']}; }}
+    QPushButton:hover {{ background: {g['btn_hover']}; border-color: {g['btn_edge_hover']}; }}
+    QPushButton:pressed {{ padding-top: 7px; padding-bottom: 5px; }}
+    QPushButton:disabled {{ color: {c['dim']}; border-color: {c['card_edge']}; }}
+    QPushButton::menu-indicator {{ subcontrol-position: right center; subcontrol-origin: padding; right: 7px; }}
+    QPushButton#Suggested {{ background: {g['primary']}; border: 1px solid {g['primary_edge']};
+                             color: {g['on_accent']}; font-weight: 700; padding: 6px 18px; }}
+    QPushButton#Suggested:hover {{ background: {g['primary_hover']}; border-color: {g['primary_edge']}; }}
+    QPushButton#Destructive {{ background: {g['danger']}; border: 1px solid {g['danger_edge']}; color: #ffffff;
+                               font-weight: 700; }}
+    QPushButton#Destructive:hover {{ background: {g['danger_hover']}; border-color: {g['danger_edge']}; }}
+    QPushButton#Mini {{ padding: 5px 0; }}
     QPushButton#Tab {{ background: transparent; border: 1px solid transparent; padding: 5px 14px; }}
+    QPushButton#Tab:hover {{ background: {c['row_hover']}; border-color: transparent; }}
     QPushButton#Tab:checked {{ background: {c['card']}; border: 1px solid {c['card_edge']};
                                color: {c['accent_text']}; font-weight: 700; }}
     #TabBox {{ background: {c['btn']}; border: 1px solid {c['card_edge']}; border-radius: 7px; }}
     QCheckBox::indicator {{ width: 40px; height: 22px; border-radius: 11px; background: {c['track']}; }}
     QCheckBox::indicator:checked {{ background: {c['accent']}; }}
-    QComboBox {{ background: {g['btn']}; border: 1px solid {c['btn_edge']}; border-radius: 5px; padding: 5px 10px; }}
-    QComboBox:hover {{ border-color: {c['accent']}; }}
+    QComboBox {{ background: {g['btn']}; border: 1px solid {g['btn_edge']}; border-radius: 7px; padding: 5px 10px; }}
+    QComboBox:hover {{ border-color: {g['btn_edge_hover']}; }}
+    QComboBox::drop-down {{ border: none; width: 24px; }}
+    QComboBox::down-arrow {{ image: url({_arrow(c['dim'])}); width: 12px; height: 12px; }}
     QComboBox QAbstractItemView {{ background: {c['card']}; border: 1px solid {c['card_edge']};
                                    selection-background-color: {c['accent']}; selection-color: #ffffff; }}
     QMenu {{ background: {c['card']}; border: 1px solid {c['card_edge']}; padding: 4px; }}
