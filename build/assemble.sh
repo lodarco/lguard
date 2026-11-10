@@ -59,7 +59,7 @@ EOF
 cp "$here/clamav/SHA256SUMS" "$C/opt/lguard/licenses/SHA256-SOURCES.txt"
 install -m 644 "$repo/LICENSE" "$C/opt/lguard/licenses/LGUARD-LICENSE.txt"
 install -D -m 644 /dev/stdin "$C/usr/share/doc/lguard/copyright" <<COPY
-Lguard - antivirus, torrent guard and ransomware shield for Linux
+Lguard - antivirus, download guard and ransomware shield for Linux
 Copyright (C) 2026 lodarco
 https://github.com/lodarco/lguard
 

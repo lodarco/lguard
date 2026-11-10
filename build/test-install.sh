@@ -15,13 +15,17 @@ cp /db/*.c?d /db/*.sign /var/lib/lguard/clamav/ && chown lguard-clamav:lguard /v
 runuser -u lguard-clamav -- /opt/lguard/clamav/sbin/clamd --config-file=/etc/lguard/clamd.conf --foreground=false
 for i in $(seq 1 90); do [ -S /run/lguard-clamd/clamd.sock ] && break; sleep 2; done
 printf "X5O!P%%@AP[4\\\\PZX54(P^)7CC)7}\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\$H+H*" > /root/eicar.com
-mkdir -p /srv/torrents/Film && printf "MZ\x90\x00junk" > /srv/torrents/Film/Codec.exe
-echo "categories = { torrents = [\"/srv/torrents\"] }" >> /etc/lguard/lguard.toml
-lguard scan /root/eicar.com /srv/torrents /etc/hostname || true
+# a film library (programs are quarantined) and a downloads folder (programs
+# are normal there; only a name that pretends is quarantined)
+mkdir -p /srv/plex/Film /srv/downloads && printf "MZ\x90\x00junk" > /srv/plex/Film/Codec.exe
+printf "MZ\x90\x00junk" > /srv/downloads/setup.exe && printf "MZ\x90\x00junk" > /srv/downloads/Movie.mp4.exe
+echo "categories = { plex = [\"/srv/plex\"], downloads = [\"/srv/downloads\"] }" >> /etc/lguard/lguard.toml
+lguard scan /root/eicar.com /srv/plex /srv/downloads /etc/hostname || true
 echo "--- status"; lguard status
 echo "--- verify"; lguard verify
 echo "--- quarantine"; lguard quarantine list
-test ! -e /root/eicar.com && test ! -e /srv/torrents/Film/Codec.exe && echo "RESULT: OK"
+test ! -e /root/eicar.com && test ! -e /srv/plex/Film/Codec.exe && test ! -e /srv/downloads/Movie.mp4.exe \
+  && test -e /srv/downloads/setup.exe && echo "RESULT: OK"
 '
 
 smoke_common='

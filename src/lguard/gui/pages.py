@@ -43,8 +43,8 @@ def when(ts) -> str:
 def kind_of(signature: str) -> tuple[str, str]:
     """(label, colour key) for a finding, in words people understand."""
     s = signature or ""
-    if s.startswith("Lguard.Torrent"):
-        return _("Fake movie"), "warning"
+    if s.startswith(("Lguard.Media", "Lguard.Torrent")):
+        return _("Fake media"), "warning"
     if s.startswith("Lguard."):
         return _("Suspicious"), "warning"
     return _("Virus"), "destructive_text"
@@ -52,14 +52,18 @@ def kind_of(signature: str) -> tuple[str, str]:
 
 def explain(signature: str) -> str:
     s = signature or ""
-    if "Torrent.Executable" in s:
-        return _("A program hidden in a movie or series download. Movies never need one.")
+    if ".Executable" in s:
+        return _("A program inside a film or music library. Media never needs one.")
+    if ".Program" in s:
+        return _("An installer or script inside a film or music library.")
+    if "HiddenArchive" in s:
+        return _("An archive under a name that hides what it is.")
     if "DoubleExtension" in s:
         return _("The name pretends to be a video or document but ends in a program extension.")
     if "FakeVideo" in s:
         return _("Named like a video, but the file is really a program or an archive.")
     if "DiskImage" in s:
-        return _("A disk image inside a media download – often used to hide installers.")
+        return _("A disk image inside a film or music library – sometimes used to hide installers.")
     return _("Matches a known threat: {s}", s=s)
 
 
@@ -95,7 +99,7 @@ class Page(QScrollArea):
 
 
 PHASES = {
-    "media": "Checking Torrents, Plex and Jellyfin…",
+    "media": "Checking Downloads, Plex and Jellyfin…",
     "drives": "Checking your drives…",
     "signatures": "Re-checking risky files with new virus signatures…",
     "fulldisk": "Full disk scan…",
@@ -145,7 +149,7 @@ class ScanBanner(Card):
         self.pause_btn = QPushButton(_("Pause"))
         m = QMenu(self.pause_btn)
         for text, minutes in ((_("For 30 minutes"), 30), (_("For 1 hour"), 60), (_("For 3 hours"), 180),
-                              (_("Until tonight (22:00)"), "night"), (_("Until I resume"), None)):
+                              (_("Until tonight (22:00)"), "night"), (_("For a day (asks for your password)"), 1440)):
             m.addAction(text, lambda mins=minutes: self.pause(mins))
         self.pause_btn.setMenu(m)
         self.resume_btn = QPushButton(_("Resume"))
@@ -175,7 +179,7 @@ class ScanBanner(Card):
                 tonight += 86400
             minutes = max(1, int((tonight - time.time()) / 60))
         if self.client:
-            self.client.request("bn.pause", "pause_sweep", minutes=minutes)
+            self.client.request("bn.pause", "pause_sweep", 600, minutes=minutes)
 
     def update_from(self, st: dict):
         t = progress_text(st)
@@ -247,10 +251,10 @@ class OverviewPage(Page):
         row.addWidget(chart_card, 2)
 
         self.modules = Card(padding=0, spacing=0)
-        for name, sub in (("Real-time protection", None), ("Torrents", "checked as soon as a download finishes"),
+        for name, sub in (("Real-time protection", None), ("Downloads", "checked as soon as a download finishes"),
                           ("Plex and Jellyfin", "libraries checked every week"),
-                          ("Ransomware shield", "freezes backups if files get encrypted"),
-                          ("Full disk scan", "every file re-checked once a month")):
+                          ("Ransomware shield", "freezes backups and stops the program if files get encrypted"),
+                          ("Full disk scan", "every file read and checked again once a month")):
             r = QFrame()
             r.setObjectName("Row")
             h = QHBoxLayout(r)
@@ -378,17 +382,45 @@ class FindingsPage(Page):
         self.client.request("fi.findings", "findings", limit=300)
         if self.mode == "quarantine":
             self.client.request("fi.quarantine", "quarantine")
+        elif self.mode == "trusted":
+            self.client.request("fi.trusted", "trusted")
 
     def on_result(self, tag, d):
         if tag == "fi.findings":
             self.findings = d
-            if self.mode != "quarantine":
-                rows = [f for f in d if (self.mode == "all") or "trusted" in (f.get("action") or "")]
-                self.render(rows, quarantine=False)
+            if self.mode == "all":
+                self.render(d, quarantine=False)
         elif tag == "fi.quarantine" and self.mode == "quarantine":
             self.render(d, quarantine=True)
+        elif tag == "fi.trusted" and self.mode == "trusted":
+            self.render_trusted(d)
         elif tag.startswith("fi.action"):
             self.refresh()
+
+    def render_trusted(self, rows):
+        """What the user chose to trust, each with a way to take it back."""
+        clear(self.list)
+        self.heading.setText(_("{n} trusted files", n=len(rows)) if rows else _("Nothing is trusted"))
+        for r in rows:
+            card = Card(padding=18, spacing=4)
+            h = QHBoxLayout()
+            h.setSpacing(14)
+            h.addWidget(IconLabel("shield", "dim", 32, 1.8), 0, Qt.AlignTop)
+            t = QVBoxLayout()
+            t.setSpacing(4)
+            note = (r.get("note") or "").replace("restored ", "")
+            t.addWidget(label(note.rsplit("/", 1)[-1].split(" (uid")[0] or r["digest"][:16], bold=True, size=16))
+            t.addWidget(label(_("Was flagged as: {s}", s=r.get("signature") or "?"), wrap=True))
+            p = label(f"SHA-256 {r['digest']}", "Dim", wrap=True)
+            p.setStyleSheet("font-family: monospace; font-size: 12px;")
+            t.addWidget(p)
+            t.addWidget(label(when(r.get("ts")), "Dim"))
+            h.addLayout(t, 1)
+            b = QPushButton(_("Remove trust"))
+            b.clicked.connect(lambda _c=False, dg=r["digest"]: self.client.request("fi.action", "untrust", 600, digest=dg))
+            h.addWidget(b)
+            card.lay.addLayout(h)
+            self.list.addWidget(card)
 
     def render(self, rows, quarantine: bool):
         clear(self.list)
@@ -443,7 +475,7 @@ class FindingsPage(Page):
             self.list.addWidget(card)
 
     def _category_suffix(self, path):
-        for cat in ("torrents", "plex", "jellyfin"):
+        for cat in ("downloads", "plex", "jellyfin"):
             if f"/{cat}" in path.lower():
                 return f" · {_(cat.capitalize())}"
         return ""
@@ -471,7 +503,7 @@ class CategoryPage(Page):
             self.tiles.append((a, b, c))
         self.v.addLayout(grid)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels([_("Download") if name == "torrents" else _("Folder"),
+        self.table.setHorizontalHeaderLabels([_("Download") if name == "downloads" else _("Folder"),
                                               _("Finished"), _("Files"), _("Result")])
         self.table.verticalHeader().hide()
         self.table.setShowGrid(False)
@@ -482,15 +514,30 @@ class CategoryPage(Page):
         card = Card(padding=0)
         card.lay.addWidget(self.table)
         self.v.addWidget(card)
-        if name == "torrents":
-            info = Card()
-            info.lay.addWidget(label(_("What Lguard checks in every download"), "CardTitle"))
-            for line in ("• every file against known viruses",
-                         "• programs hidden in movies or series (.exe, .scr, .lnk, .msi…) – quarantined even if no virus is known yet",
-                         "• tricks like “Movie.mp4.exe” and “videos” that are really programs or archives"):
-                info.lay.addWidget(label(_(line), wrap=True))
-            self.v.addWidget(info)
+        self.info = Card()
+        self.info_title = label("", "CardTitle")
+        self.info.lay.addWidget(self.info_title)
+        self.info_lines = [label("", wrap=True) for _i in range(3)]
+        for w in self.info_lines:
+            self.info.lay.addWidget(w)
+        self.v.addWidget(self.info)
+        self.set_mode("downloads" if name == "downloads" else "media")
         self.v.addStretch(1)
+
+    def set_mode(self, mode):
+        """What is checked here depends on what the folder is for."""
+        if mode == "media":
+            self.info_title.setText(_("What Lguard checks in a media library"))
+            lines = ("• every file against known viruses",
+                     "• programs (.exe, .scr, .lnk, .msi…) – quarantined even if no virus is known yet: films and music never need one",
+                     "• tricks like “Movie.mp4.exe” and “videos” that are really programs or archives")
+        else:
+            self.info_title.setText(_("What Lguard checks in every download"))
+            lines = ("• every file against known viruses, big archives and disk images included",
+                     "• tricks like “Movie.mp4.exe” and “videos” that are really programs or archives – quarantined even if no virus is known yet",
+                     "• programs, installers and disk images are normal here: they are scanned, not removed")
+        for w, line in zip(self.info_lines, lines):
+            w.setText(_(line))
 
     def refresh(self):
         self.client.request(f"cat.{self.name}", "category", name=self.name)
@@ -500,26 +547,32 @@ class CategoryPage(Page):
             return
         paths = d.get("paths") or []
         items = d.get("items") or []
+        self.set_mode(d.get("mode") or ("downloads" if self.name == "downloads" else "media"))
         month = [i for i in items if time.time() - i["changed"] < 31 * 86400]
         bad = [i for i in items if i["findings"]]
-        self.tiles[0][0].setText(_("Download folder") if self.name == "torrents" else _("Folder"))
+        self.tiles[0][0].setText(_("Download folder") if self.name == "downloads" else _("Folder"))
         self.tiles[0][1].setText(self.tiles[0][1].fontMetrics().elidedText(paths[0], Qt.ElideLeft, 260)
                                  if paths else "–")
         self.tiles[0][1].setStyleSheet("font-size: 15px; font-family: monospace;")
         self.tiles[0][2].setText(", ".join(paths[1:]) if len(paths) > 1 else
-                                 (_("checked as soon as a download finishes") if self.name == "torrents"
+                                 (_("checked as soon as a download finishes") if self.name == "downloads"
                                   else _("libraries checked every week")) if paths
                                  else _("No folder set for {name}", name=self.title))
         self.tiles[1][0].setText(_("This month"))
-        self.tiles[1][1].setText(_("{n} downloads", n=len(month)) if self.name == "torrents" else _("{n} folders changed", n=len(month)))
+        self.tiles[1][1].setText(_("{n} downloads", n=len(month)) if self.name == "downloads" else _("{n} folders changed", n=len(month)))
         self.tiles[1][2].setText(_("{n} files · {size}", n=sum(i['files'] for i in month), size=human_bytes(sum(i['bytes'] for i in month))))
         self.tiles[2][0].setText(_("Stopped"))
         self.tiles[2][1].setText(f"{len(bad)}")
         self.tiles[2][1].setStyleSheet(f"color: {theme.current['warning' if bad else 'ink']};")
-        self.tiles[2][2].setText(_("fake movies or viruses"))
+        self.tiles[2][2].setText(_("fake media or viruses"))
         self.table.setRowCount(len(items))
         for r, i in enumerate(items):
-            res = (_("Fake movie") + " – " + _("Quarantined")) if i["findings"] else _("Clean")
+            if i["findings"]:
+                f0 = i["findings"][0]
+                res = kind_of(f0.get("signature"))[0] + " – " + (
+                    _("Quarantined") if "quarantined" in (f0.get("action") or "") else _("Reported"))
+            else:
+                res = _("Clean")
             vals = [i["name"], when(i["changed"]), f"{i['files']} · {human_bytes(i['bytes'])}", res]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
@@ -559,6 +612,20 @@ class RansomwarePage(Page):
         row.addWidget(self.btn)
         self.card.lay.addLayout(row)
         self.v.addWidget(self.card)
+        self.stopped = Card(padding=20)
+        srow = QHBoxLayout()
+        srow.addWidget(IconLabel("warning", "warning", 32, 1.8))
+        st = QVBoxLayout()
+        st.addWidget(label(_("A program was stopped"), "CardTitle"))
+        self.stopped_text = label("", "Dim", wrap=True)
+        st.addWidget(self.stopped_text)
+        srow.addLayout(st, 1)
+        cont = QPushButton(_("Let it continue"))
+        cont.clicked.connect(lambda: self.client.request("rw.unfreeze", "resume_process", 600))
+        srow.addWidget(cont)
+        self.stopped.lay.addLayout(srow)
+        self.stopped.hide()
+        self.v.addWidget(self.stopped)
         explain = Card()
         explain.lay.addWidget(label(_("How it works"), "CardTitle"))
         explain.lay.addWidget(label(_("ransom_explain"), wrap=True))
@@ -575,6 +642,10 @@ class RansomwarePage(Page):
             self.head.setText(_("Backups are frozen") if frozen else _("No ransomware activity"))
             self.sub.setText(d.get("frozen") if frozen else _("Your documents look normal."))
             self.btn.setVisible(frozen)
+            procs = d.get("stopped") or []
+            self.stopped.setVisible(bool(procs))
+            self.stopped_text.setText(_("stopped_explain") + "\n" + "\n".join(
+                f"{p.get('proc')} (pid {p.get('pid')})" for p in procs))
         elif tag == "rw.unfreeze":
             self.refresh()
 
@@ -604,6 +675,12 @@ class IntegrityPage(Page):
                  _("Protected file (older system)"), "success" if "sealed" in key else "warning"),
                 (_("History entries"), _("{n} · intact", n=d.get('history', {}).get('entries')), "success"),
                 (_("Files protected"), human_int(d.get("files", 0)), "success")]
+        partial = (d.get("counts") or {}).get("partial", 0)
+        if partial:
+            rows.append((_("Too large to check completely"), human_int(partial), "warning"))
+        rows.append((_("Downloads moved into place"), _("Seen at once") if d.get("rename_events", True)
+                     else _("Checked every 5 minutes (older system)"),
+                     "success" if d.get("rename_events", True) else "warning"))
         for name, value, colour in rows:
             r = QFrame()
             r.setObjectName("Row")
@@ -676,11 +753,12 @@ class HistoryPage(Page):
 
 
 # ------------------------------------------------------------------ folders
-BUILTIN = ("torrents", "plex", "jellyfin")
+BUILTIN = ("downloads", "plex", "jellyfin")
+MEDIA_NAMES = ("plex", "jellyfin", "emby", "kodi")
 
 
 class FoldersPage(Page):
-    """Which folders are Torrents / Plex / Jellyfin / your own categories,
+    """Which folders are Downloads / Plex / Jellyfin / your own categories,
     which are not scanned at all, and where Lguard only reports."""
     title = "Folders"
     categories_changed = Signal(list)
@@ -726,9 +804,13 @@ class FoldersPage(Page):
                          "priority_paths": list(d.get("priority_paths") or []),
                          "extra_excludes": [p[:-2] if p.endswith("/*") else p for p in d.get("extra_excludes") or []],
                          "report_only": list(d.get("report_only") or []),
+                         "data_paths": list(d.get("data_paths") or []),
+                         "category_modes": dict(d.get("category_modes") or {}),
                          "detected": d.get("detected") or {}}
             for b in BUILTIN:
                 self.data["categories"].setdefault(b, [])
+            for name in self.data["categories"]:
+                self.data["category_modes"].setdefault(name, "media" if name.lower() in MEDIA_NAMES else "downloads")
             self.render()
             self.set_dirty(False)
             if tag == "fo.save":
@@ -744,6 +826,9 @@ class FoldersPage(Page):
                                              d["categories"][name], d["detected"].get(name, []),
                                              removable=name not in BUILTIN,
                                              key=("cat", name)))
+        self.body.addWidget(self.section(_("Protected by the ransomware shield"), d["data_paths"], [],
+                                         key=("data_paths",),
+                                         hint=_("Folders with your documents and photos. Lguard raises the alarm when files here get encrypted.")))
         self.body.addWidget(self.section(_("Not scanned"), d["extra_excludes"], [], key=("extra_excludes",),
                                          hint=_("Folders Lguard never scans, e.g. scratch or render folders.")))
         self.body.addWidget(self.section(_("Report only"), d["report_only"], [], key=("report_only",),
@@ -760,6 +845,13 @@ class FoldersPage(Page):
             rm = QPushButton(_("Remove category"))
             rm.clicked.connect(lambda: self.remove_category(key[1]))
             head.addWidget(rm)
+        if key[0] == "cat":
+            mode = QComboBox()
+            mode.addItem(_("Media library – programs are quarantined"), "media")
+            mode.addItem(_("Downloads – programs are allowed"), "downloads")
+            mode.setCurrentIndex(max(0, mode.findData(self.data["category_modes"].get(key[1], "downloads"))))
+            mode.currentIndexChanged.connect(lambda _i, n=key[1], m=mode: self.set_category_mode(n, m.currentData()))
+            head.addWidget(mode)
         card.lay.addLayout(head)
         if hint:
             card.lay.addWidget(label(hint, "Dim", wrap=True))
@@ -825,12 +917,18 @@ class FoldersPage(Page):
             self.render()
             self.set_dirty(True)
 
+    def set_category_mode(self, name, mode):
+        if self.data and self.data["category_modes"].get(name) != mode:
+            self.data["category_modes"][name] = mode
+            self.set_dirty(True)
+
     def new_category(self):
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, _("+ New category"), _("Name (e.g. Downloads, Work):"))
         name = (name or "").strip()
         if ok and name and self.data is not None and name not in self.data["categories"]:
             self.data["categories"][name] = []
+            self.data["category_modes"][name] = "media" if name.lower() in MEDIA_NAMES else "downloads"
             self.render()
             self.set_dirty(True)
 
@@ -845,7 +943,8 @@ class FoldersPage(Page):
         self.status.setText(_("Saving… (asks for your password)"))
         self.client.request("fo.save", "set_folders", 600, categories=d["categories"],
                             priority_paths=d["priority_paths"], extra_excludes=d["extra_excludes"],
-                            report_only=d["report_only"])
+                            report_only=d["report_only"], data_paths=d["data_paths"],
+                            category_modes={k: v for k, v in d["category_modes"].items() if k in d["categories"]})
 
 
 # ------------------------------------------------------------------ settings

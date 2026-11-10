@@ -135,7 +135,7 @@ class DesktopWidget(QWidget):
 # ------------------------------------------------------------------ main window
 class MainWindow(QMainWindow):
     NAV = [("overview", "Overview"), ("findings", "Findings & quarantine"),
-           ("-", "Media"), ("torrents", "Torrents"), ("plex", "Plex"), ("jellyfin", "Jellyfin"),
+           ("-", "Media"), ("downloads", "Downloads"), ("plex", "Plex"), ("jellyfin", "Jellyfin"),
            ("-", "Protection"), ("ransomware", "Ransomware shield"), ("integrity", "System integrity"),
            ("folders", "Folders"), ("scan", "Scan a folder"), ("history", "History"), ("settings", "Settings")]
 
@@ -167,7 +167,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.pages = {
             "overview": OverviewPage(client), "findings": FindingsPage(client),
-            "torrents": CategoryPage(client, "torrents"), "plex": CategoryPage(client, "plex"),
+            "downloads": CategoryPage(client, "downloads"), "plex": CategoryPage(client, "plex"),
             "jellyfin": CategoryPage(client, "jellyfin"), "ransomware": RansomwarePage(client),
             "integrity": IntegrityPage(client), "folders": FoldersPage(client), "scan": ScanPage(client),
             "history": HistoryPage(client), "settings": SettingsPage(client, settings),
@@ -376,7 +376,7 @@ class LguardApp:
             m.addSeparator()
             m.addAction(QAction(_("Open Lguard"), m, triggered=self.open_main))
             self.tray_pause = QAction(_("Pause scan for 1 hour"), m,
-                                      triggered=lambda: self.client.request("tr.pause", "pause_sweep", minutes=60))
+                                      triggered=lambda: self.client.request("tr.pause", "pause_sweep", 600, minutes=60))
             self.tray_resume = QAction(_("Resume scan"), m,
                                        triggered=lambda: self.client.request("tr.resume", "resume_sweep"))
             m.addAction(self.tray_pause)
@@ -493,7 +493,8 @@ class LguardApp:
         notify = self.settings.value("notifications", True, type=bool)
         if kind == "finding" and notify:
             cat = ev.get("category")
-            title = (_("Fake movie") if (ev.get("signature") or "").startswith("Lguard.Torrent") else _("Virus"))
+            title = (_("Fake media") if (ev.get("signature") or "").startswith(("Lguard.Media", "Lguard.Torrent"))
+                     else _("Virus"))
             title += " – " + (_("Quarantined") if ev.get("action") == "quarantined" else ev.get("verdict", ""))
             body = os.path.basename(ev.get("path", "")) + (f"  ({_(cat.capitalize())})" if cat else "")
             self.notifier.send(title, body, 1, [("default", _("Show details"))])

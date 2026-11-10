@@ -15,6 +15,17 @@ RestartSec=10
 Nice=5
 OOMScoreAdjust=-500
 TimeoutStopSec=30
+# Root is needed to read every file and to move threats away; the rest is
+# closed. (Freeze commands and notifications still run from here.)
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

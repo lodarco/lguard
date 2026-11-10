@@ -1,4 +1,4 @@
-"""File type by content (magic bytes), entropy, and the torrent heuristics.
+"""File type by content (magic bytes), entropy, and the fake-media heuristics.
 
 Extensions lie; the first bytes rarely do. Everything here works on a small
 head sample read from an already-open descriptor.
@@ -53,11 +53,38 @@ _MAGIC = [
     ("ogg", 0, b"OggS"),
     ("shebang", 0, b"#!"),
     ("sqlite", 0, b"SQLite format 3\x00"),
+    ("psd", 0, b"8BPS"),
+    ("tiff", 0, b"II*\x00"),                   # also most camera RAW formats
+    ("tiff", 0, b"MM\x00*"),
+    ("bmp", 0, b"BM"),
+    ("rtf", 0, b"{\\rtf"),
+    ("kdbx", 0, b"\x03\xd9\xa2\x9a"),
+    ("dwg", 0, b"AC10"),
+    ("class", 0, b"\xca\xfe\xba\xbe"),
+    ("macho", 0, b"\xcf\xfa\xed\xfe"),
+    ("macho", 0, b"\xce\xfa\xed\xfe"),
+    ("onenote", 0, b"\xe4\x52\x5c\x7b\x8c\xd8\xa7\x4d"),
+    ("tar", 257, b"ustar"),
 ]
 
-EXECUTABLE_KINDS = {"elf", "pe", "lnk", "shebang"}
-ARCHIVE_KINDS = {"zip", "rar", "7z", "gzip", "xz", "bzip2", "zstd", "iso"}
+EXECUTABLE_KINDS = {"elf", "pe", "lnk", "shebang", "macho", "class"}
+ARCHIVE_KINDS = {"zip", "rar", "7z", "gzip", "xz", "bzip2", "zstd", "iso", "tar"}
 VIDEO_KINDS = {"ebml", "mp4", "avi", "asf", "flv", "mpeg-ps", "mpeg-ts"}
+# Positively identified media: nothing in the middle of these for the engine
+# to unpack, so very big ones are scanned head and tail only.
+MEDIA_KINDS = VIDEO_KINDS | {"wav", "flac", "ogg", "id3", "mpeg-audio"}
+# Extensions that are a program whatever the content looks like.
+STRONG_EXEC_EXT = {"exe", "scr", "bat", "cmd", "com", "pif", "msi", "msp", "lnk", "ps1", "vbs", "vbe",
+                   "js", "jse", "wsf", "wsh", "hta", "jar", "cpl", "dll"}
+# Documents that can carry scripts or exploits (re-checked with new signatures).
+ACTIVE_DOC_EXT = {"html", "htm", "mht", "svg", "rtf", "eml", "msg", "one", "chm", "desktop", "xll",
+                  "xlam", "ppam", "dotm", "xltm", "iqy", "slk", "wasm", "class", "swf"}
+
+
+def is_program(magic: bytes) -> bool:
+    """Cheap test on the first bytes: is this something that can run?"""
+    return magic[:4] == b"\x7fELF" or magic[:2] in (b"MZ", b"#!") or \
+        magic[:4] in (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe")
 
 
 def kind(head: bytes) -> str:
@@ -114,10 +141,11 @@ def ext_of(path: str) -> str:
 
 
 def is_risky(k: str, ext: str) -> bool:
-    """Worth re-scanning when new signatures arrive."""
-    return (k in EXECUTABLE_KINDS or k in ARCHIVE_KINDS or k in ("pdf", "ole", "zip")
+    """Worth re-scanning when new signatures arrive, while the file is new.
+    A file of unknown type counts too: nobody knows what it is."""
+    return (k in EXECUTABLE_KINDS or k in ARCHIVE_KINDS or k in ("pdf", "ole", "zip", "rtf", "onenote", "unknown")
             or ext in EXEC_EXT or ext in SCRIPT_EXT or ext in OFFICE_ZIP_EXT
-            or ext in OFFICE_OLE_EXT or ext in ARCHIVE_EXT)
+            or ext in OFFICE_OLE_EXT or ext in ARCHIVE_EXT or ext in ACTIVE_DOC_EXT)
 
 
 _DOUBLE_EXT = re.compile(
@@ -127,25 +155,35 @@ _DOUBLE_EXT = re.compile(
 )
 
 
-def torrent_verdict(path: str, k: str, fd: int) -> tuple[str, str] | None:
-    """Heuristics for media/download folders. Returns (level, name) or None.
+def media_verdict(path: str, k: str, fd: int, mode: str = "media") -> tuple[str, str] | None:
+    """Heuristics for category folders. Returns (level, name) or None.
 
     level "suspicious" = quarantine; "warning" = report only.
-    A movie or series torrent has no business carrying programs; the classic
-    torrent malware is a fake film that is really an installer.
+
+    In every category: a name that pretends (Movie.mp4.exe) and a "video"
+    that is really a program, an archive or a document.
+    Only in mode "media" (a film or music library, where a program has no
+    business): programs are quarantined; installers, disk images and archives
+    in disguise are reported. In mode "downloads" those are normal content
+    and are simply scanned like every other file.
     """
     name = os.path.basename(path)
     ext = ext_of(path)
     if _DOUBLE_EXT.search(name):
-        return "suspicious", "Lguard.Torrent.DoubleExtension"
-    if ext in VIDEO_EXT and (k in EXECUTABLE_KINDS or k in ARCHIVE_KINDS or k in ("ole", "pdf", "text")):
-        return "suspicious", f"Lguard.Torrent.FakeVideo.{k}"
-    if k in EXECUTABLE_KINDS or ext in EXEC_EXT:
-        return "suspicious", f"Lguard.Torrent.Executable.{k if k != 'unknown' else ext}"
-    if ext in ("iso", "img") or (ext not in VIDEO_EXT and is_iso(fd)):
-        return "suspicious", "Lguard.Torrent.DiskImage"
+        return "suspicious", "Lguard.Media.DoubleExtension"
+    if ext in VIDEO_EXT and (k in EXECUTABLE_KINDS or k in ARCHIVE_KINDS or k in ("ole", "pdf")
+                             or (k == "text" and ext != "ts")):      # .ts is also TypeScript
+        return "suspicious", f"Lguard.Media.FakeVideo.{k}"
+    if mode != "media":
+        return None
+    if k in EXECUTABLE_KINDS or ext in STRONG_EXEC_EXT:
+        return "suspicious", f"Lguard.Media.Executable.{k if k in EXECUTABLE_KINDS else ext}"
+    if ext in EXEC_EXT:
+        return "warning", f"Lguard.Media.Program.{ext}"
+    if ext in ("iso", "img") or (ext not in VIDEO_EXT and k in ("unknown", "text") and is_iso(fd)):
+        return "warning", "Lguard.Media.DiskImage"
     if k == "zip" and ext not in ARCHIVE_EXT | OFFICE_ZIP_EXT:
-        return "warning", "Lguard.Torrent.HiddenArchive"
+        return "warning", "Lguard.Media.HiddenArchive"
     return None
 
 
@@ -155,7 +193,9 @@ def torrent_verdict(path: str, k: str, fd: int) -> tuple[str, str] | None:
 _EXPECT = {
     **{e: {"zip"} for e in OFFICE_ZIP_EXT | {"zip", "jar", "apk"}},
     **{e: {"ole", "zip"} for e in OFFICE_OLE_EXT},
-    "pdf": {"pdf"},
+    "pdf": {"pdf"}, "rtf": {"rtf"}, "psd": {"psd"}, "kdbx": {"kdbx"}, "dwg": {"dwg"}, "tar": {"tar"},
+    "bmp": {"bmp"}, "tif": {"tiff"}, "tiff": {"tiff"}, "cr2": {"tiff"}, "nef": {"tiff"}, "arw": {"tiff"},
+    "dng": {"tiff"}, "heic": {"mp4"}, "cr3": {"mp4"},
     "jpg": {"jpeg"}, "jpeg": {"jpeg"}, "png": {"png"}, "gif": {"gif"},
     "webp": {"webp"},
     "mkv": {"ebml"}, "webm": {"ebml"},
@@ -186,13 +226,20 @@ def looks_encrypted(path: str, head: bytes) -> bool:
         return False
     if kind(head) in expected:
         return False
-    return entropy(head) > 7.5
+    # also when only the beginning was encrypted (fast, "intermittent" ransomware)
+    return entropy(head) > 7.5 or entropy(head[:4096]) > 7.5
+
+
+def promises_format(path: str) -> bool:
+    """The name says this is a document, picture or other personal file."""
+    parts = os.path.basename(path).lower().split(".")
+    return len(parts) > 1 and parts[-1] in _EXPECT
 
 
 # Formats whose content is compressed by nature: high entropy is normal there.
 NATURALLY_DENSE = {"zip", "gzip", "xz", "bzip2", "zstd", "7z", "rar", "jpeg", "png", "gif", "webp",
                    "mp4", "ebml", "asf", "flv", "avi", "ogg", "flac", "id3", "mpeg-audio", "pdf",
-                   "ole", "sqlite", "mpeg-ts", "mpeg-ps"}
+                   "ole", "sqlite", "mpeg-ts", "mpeg-ps", "tiff", "psd", "kdbx", "wav", "class"}
 
 
 def looks_random(head: bytes) -> bool:

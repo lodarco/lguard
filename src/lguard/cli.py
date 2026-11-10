@@ -74,7 +74,24 @@ def cmd_scan(cfg, args):
     return 1 if bad else 0
 
 
+def _sweep_lock(wait: bool):
+    """Only one sweep at a time. The nightly check gives way to a scan that
+    is already running; a full disk scan asked for by the user waits."""
+    import fcntl
+    f = open(os.path.join(config_mod.STATE_DIR, "sweep.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+    except BlockingIOError:
+        return None
+    return f
+
+
 def cmd_sweep(cfg, args):
+    _need_root()
+    lock = _sweep_lock(wait=args.full)
+    if lock is None:
+        print("sweep: another scan is already running")
+        return 0
     idx = open_index()
 
     def progress(**kw):
@@ -83,6 +100,8 @@ def cmd_sweep(cfg, args):
                   end="", flush=True)
     sw = Sweep(cfg, Scanner(cfg, idx), progress=progress)
     sw.report = True
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: setattr(sw, "stop", True))   # stop at a file boundary
     stats = sw.full(only_priority=args.priority, deep=args.full)
     seq, head = idx.ledger_head()
     vault.write_anchor(seq, head)
@@ -102,7 +121,41 @@ def cmd_maintenance(cfg, args):
     print(f"maintenance: {sw.stats}; verified {n} files / {used // 1024 ** 2} MiB, {mism} mismatches")
 
 
+def _status_via_service():
+    """Without root: ask the running service, like the app does."""
+    import json
+    import socket
+    from .api import SOCKET_PATH
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(30)
+            s.connect(SOCKET_PATH)
+            s.sendall(b'{"id":1,"method":"status"}\n')
+            reply = json.loads(s.makefile("rb").readline())
+    except (OSError, ValueError) as e:
+        sys.exit(f"lguard: the service does not answer ({e}); try: sudo lguard status")
+    if "error" in reply:
+        sys.exit(f"lguard: {reply['error']} (try: sudo lguard status)")
+    d = reply["result"]
+    c = d.get("counts") or {}
+    sw = d.get("sweep") or {}
+    print(f"version:       {d.get('version', '?')}")
+    print(f"engine:        {d['engine']}, signatures {d['signatures']}" + ("" if d.get("engine_ok") else "  (NOT RUNNING)"))
+    print(f"real-time:     {'on' if d.get('realtime') else 'OFF'}; watching {', '.join(d.get('watched') or [])}")
+    print(f"key:           {d['key']}")
+    print(f"inventory:     {d['files']} files"
+          + (f" (clean {c.get('clean', 0)}, partly checked {c.get('partial', 0)}, infected {c.get('infected', 0)})" if c else ""))
+    print(f"last sweep:    {_ts(d.get('last_sweep'))}" + (f"; running now: {sw.get('phase')} {sw.get('percent')}%" if sw.get("running") else ""))
+    print(f"frozen:        {d.get('frozen', 'no')}")
+    for p in d.get("stopped") or []:
+        print(f"stopped:       pid {p['pid']} {p['proc']}  (sudo lguard resume-process)")
+    print(f"quarantine:    {d.get('quarantine', 0)} files")
+    return 0
+
+
 def cmd_status(cfg, args):
+    if os.geteuid() != 0:
+        return _status_via_service()
     idx = open_index(readonly=True)
     try:
         eng, db = Clamd(cfg.clamd_socket).version()
@@ -196,6 +249,27 @@ def cmd_quarantine(cfg, args):
     idx.close()
 
 
+def cmd_resume_process(cfg, args):
+    from .ransom import resume_stopped
+    idx = open_index()
+    done = resume_stopped(idx)
+    idx.close()
+    print("continued: " + ", ".join(done) if done else "no program is stopped")
+
+
+def cmd_trust(cfg, args):
+    idx = open_index()
+    if args.action == "list":
+        for e in idx.allowlist():
+            print(f"{_ts(e['ts'])}  {e['digest']}  {e.get('signature') or '':30} {e.get('note') or ''}")
+    else:
+        if not args.digest:
+            sys.exit("trust remove needs the SHA-256 (see: lguard trust list)")
+        idx.unallow(args.digest, "lguard trust remove")
+        print("removed; the content will be judged again")
+    idx.close()
+
+
 def cmd_freeze(cfg, args):
     idx = open_index()
     if args.action == "freeze":
@@ -208,7 +282,7 @@ def cmd_freeze(cfg, args):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="lguard", description="Lguard - antivirus, torrent guard and ransomware alarm")
+    ap = argparse.ArgumentParser(prog="lguard", description="Lguard - antivirus, download guard and ransomware shield")
     ap.add_argument("-c", "--config", default=config_mod.CONFIG_PATH)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -218,20 +292,20 @@ def main(argv=None):
     p.add_argument("paths", nargs="+")
     p.add_argument("-f", "--force", action="store_true", help="ignore the inventory, rescan")
     p.add_argument("-v", "--verbose", action="store_true")
-    p.add_argument("--priority", action="store_true", help="(from qBittorrent) same as scan")
+    p.add_argument("--priority", action="store_true", help="(from a download client) same as scan")
     p.set_defaults(fn=cmd_scan)
 
     p = sub.add_parser("sweep", help="walk all disks, scan what changed (first run: everything)")
-    p.add_argument("--priority", action="store_true", help="only the priority (media/torrent) folders")
+    p.add_argument("--priority", action="store_true", help="only the category (media/download) folders")
     p.add_argument("--full", action="store_true", help="full disk scan: read every file again now")
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(fn=cmd_sweep)
 
-    p = sub.add_parser("maintenance", help="prune, retro-hunt, deep byte verification")
+    p = sub.add_parser("maintenance", help="prune the inventory and run a slice of the full disk scan")
     p.add_argument("--verify-gb", type=float, help="deep verification budget (default from config)")
     p.set_defaults(fn=cmd_maintenance)
 
-    sub.add_parser("status").set_defaults(fn=cmd_status)
+    sub.add_parser("status", help="state of protection (no root needed)").set_defaults(fn=cmd_status)
     sub.add_parser("verify", help="check the inventory and history for tampering").set_defaults(fn=cmd_verify)
 
     p = sub.add_parser("findings")
@@ -247,6 +321,14 @@ def main(argv=None):
     p.add_argument("id", nargs="?")
     p.add_argument("--allow", action="store_true", help="with restore: never flag this content again")
     p.set_defaults(fn=cmd_quarantine)
+
+    sub.add_parser("resume-process", help="let a program stopped by the ransomware shield continue"
+                   ).set_defaults(fn=cmd_resume_process)
+
+    p = sub.add_parser("trust", help="content you chose to trust (restore & trust)")
+    p.add_argument("action", choices=["list", "remove"])
+    p.add_argument("digest", nargs="?")
+    p.set_defaults(fn=cmd_trust)
 
     for name in ("freeze", "unfreeze"):
         p = sub.add_parser(name, help=f"{name} backups/sync (freeze_commands)")

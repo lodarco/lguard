@@ -1,7 +1,6 @@
 [Unit]
 Description=Lguard full disk scan (every file read and checked again; started from the app)
 After=lguard-clamd.service
-Conflicts=lguard-sweep.service
 
 [Service]
 Type=oneshot

@@ -1,12 +1,16 @@
 """lguardd: real-time protection.
 
-  fanotify reader ──► debounce (path quiet for N s) ──► priority queue ──► scan workers
-        │                                                    (media/torrent folders first)
-        └──────────► ransomware detector (immediately, cheap head read)
+  written files ─┐
+  (close-write)  ├─► debounce (path quiet for N s) ──► priority queue ──► scan workers
+  files moved    │                                       (category folders first)
+  into place ────┘
+  written / deleted / moved away ──► ransomware detector (at once, cheap head read)
 
-Runs as root under systemd. Sweeps are separate timer units; the daemon only
-handles what changes while it runs, plus a light poll of the priority folders
-(files moved into place by rename produce no close-write event).
+Runs as root under systemd. Sweeps are separate timer units; the daemon
+handles what changes while it runs. Filesystems mounted later (a USB stick)
+are picked up within seconds. On kernels without rename events (before 5.9)
+the category folders are polled and a folder where a download just finished
+is looked at again.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ import os
 import queue
 import select
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -22,10 +27,11 @@ import time
 from . import config as config_mod
 from .clamd import Clamd
 from .api import Api
-from .fanotify import Fanotify
+from .fanotify import DirEvents, Fanotify
 from .i18n import set_language, t
 from .index import Index
-from . import vault
+from . import filetype, vault
+from . import notify as notify_mod
 from .notify import notify
 from .ransom import RansomDetector
 from .scanner import Scanner
@@ -64,25 +70,74 @@ class Daemon:
         self.watched: list[str] = []
         self.current: dict[int, str] = {}
         self.api = Api(cfg, v, INDEX_PATH, daemon=self, log=log)
+        notify_mod.skip_uids = self.api.subscriber_uids
         self.clamd_down_since = 0.0
+        self.names: DirEvents | None = None                   # rename/delete events (Linux 5.9+)
+        self.recheck: dict[str, float] = {}                   # folder -> look again until
 
     # ---------------------------------------------------------------- reader
-    def reader(self):
-        fan = Fanotify()
-        for r in roots(self.cfg):
+    def _watch(self, fan: Fanotify, announce: bool = True):
+        """Mark every local filesystem not marked yet; forget the ones that
+        went away. Returns the newly watched mount points."""
+        now = roots(self.cfg)
+        new = []
+        for r in now:
+            if r in self.watched:
+                continue
             try:
                 how = fan.mark(r)
-                self.watched.append(r)
-                log(f"watching {r} ({how})")
             except OSError as e:
-                log(f"cannot watch {r}: {e}")
+                if announce:
+                    log(f"cannot watch {r}: {e}")
+                continue
+            self.watched.append(r)
+            new.append(r)
+            names = ""
+            if self.names is not None:
+                try:
+                    self.names.mark(r)
+                    names = ", renames and deletes"
+                except OSError as e:
+                    names = f", no rename events here ({e.strerror})"
+            log(f"watching {r} ({how}{names})")
+        for r in [r for r in self.watched if r not in now]:
+            self.watched.remove(r)
+            if self.names is not None:
+                self.names.unmark(r)
+            log(f"no longer mounted: {r}")
+        return new
+
+    def _queue(self, path: str, proc: str):
+        with self.pending_lock:
+            if len(self.pending) > 500_000 and path not in self.pending:
+                self.stats["overflows"] += 1          # a sweep will catch up
+                return
+            self.pending[path] = (time.time(), proc)
+
+    def reader(self):
+        fan = Fanotify()
+        try:
+            self.names = DirEvents()
+        except OSError as e:
+            log(f"rename events not available on this kernel ({e.strerror}): category folders are polled instead")
+        self._watch(fan)
+        if self.names is not None:
+            threading.Thread(target=self.names_reader, name="names", daemon=True).start()
         poll = select.poll()
         poll.register(fan.fd, select.POLLIN)
         cfg = self.cfg
+        last_mounts = time.time()
         while not self.stop.is_set():
+            if time.time() - last_mounts > 5:
+                last_mounts = time.time()
+                try:
+                    if self._watch(fan, announce=False):
+                        self.start_sweep("new disk")      # what is already on it
+                except OSError:
+                    pass
             if not poll.poll(1000):
                 continue
-            for path, pid, overflow in fan.read():
+            for path, pid, overflow, magic in fan.read():
                 if overflow:
                     self.stats["overflows"] += 1
                     log("fanotify queue overflow: a sweep will catch up")
@@ -90,17 +145,77 @@ class Daemon:
                 if pid in self.own_pids:
                     continue
                 self.stats["events"] += 1
-                if cfg.is_excluded(path) or not cfg.is_watched(path):
+                if not cfg.is_watched(path):
                     continue
+                if cfg.is_excluded(path):
+                    if self.names is None and cfg.is_incomplete(path):
+                        # no rename events: the finished download will show
+                        # up in this folder under its real name
+                        self.recheck[os.path.dirname(path)] = time.time() + 900
+                    continue
+                if cfg.is_soft_excluded(path) and not filetype.is_program(magic):
+                    continue                              # cache/log data; programs are never exempt
                 proc = _proc_name(pid)
-                with self.pending_lock:
-                    self.pending[path] = (time.time(), proc)
+                self._queue(path, proc)
                 if cfg.is_data(path):
                     try:
-                        self.ransom_q.put_nowait((path, proc))
+                        self.ransom_q.put_nowait((path, proc, pid, "write"))
                     except queue.Full:
                         pass
         fan.close()
+
+    def names_reader(self):
+        """Files (and folders) renamed into place are scanned like written
+        ones; documents that disappear are reported to the ransomware
+        detector."""
+        cfg = self.cfg
+        poll = select.poll()
+        poll.register(self.names.fd, select.POLLIN)
+        while not self.stop.is_set():
+            if not poll.poll(1000):
+                continue
+            try:
+                events = list(self.names.read())
+            except OSError as e:
+                log(f"rename events: {e}")
+                continue
+            for what, path, pid, is_dir in events:
+                if path is None:
+                    self.stats["overflows"] += 1
+                    continue
+                if pid in self.own_pids or not cfg.is_watched(path):
+                    continue
+                if what == "moved_to":
+                    if cfg.is_excluded(path if not is_dir else path + "/x"):
+                        continue
+                    self.stats["events"] += 1
+                    if is_dir:
+                        if cfg.is_soft_excluded(path + "/x"):
+                            continue
+                        threading.Thread(target=self.enqueue_tree, args=(path, _proc_name(pid), 1),
+                                         daemon=True).start()
+                    else:
+                        proc = _proc_name(pid)
+                        self._queue(path, proc)
+                        if cfg.is_data(path):
+                            try:
+                                self.ransom_q.put_nowait((path, proc, pid, "write"))
+                            except queue.Full:
+                                pass
+                elif not is_dir and cfg.is_data(path) and filetype.promises_format(path):
+                    try:
+                        self.ransom_q.put_nowait((path, _proc_name(pid), pid, what))
+                    except queue.Full:
+                        pass
+
+    def start_sweep(self, why: str):
+        """Ask systemd for a quick check (it does nothing if one is running)."""
+        try:
+            subprocess.run(["systemctl", "start", "--no-block", "lguard-sweep.service"],
+                           capture_output=True, timeout=30)
+            log(f"quick check requested: {why}")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(f"could not start a quick check ({why}): {e}")
 
     # -------------------------------------------------------------- debounce
     def debouncer(self):
@@ -122,20 +237,43 @@ class Daemon:
                         heapq.heappush(self.work, (prio, now, p, proc))
                         self.stats["queued"] += 1
                     self.work_cv.notify_all()
-            # Priority folders: renames into place give no close-write event.
-            if cfg.all_priority_paths and now - last_poll > 300:
-                last_poll = now
+            # Without rename events: poll the category folders, and look
+            # again at folders where a download was being written.
+            if self.names is None:
+                if cfg.all_priority_paths and now - last_poll > 300:
+                    last_poll = now
+                    threading.Thread(target=self.poll_priority, daemon=True).start()
+                for d, until in list(self.recheck.items()):
+                    if now > until:
+                        del self.recheck[d]
+                        continue
+                    try:
+                        with os.scandir(d) as it:
+                            for e in it:
+                                if (e.is_file(follow_symlinks=False) and not cfg.is_excluded(e.path)
+                                        and now - e.stat(follow_symlinks=False).st_ctime < 60):
+                                    self._queue(e.path, "download")
+                    except OSError:
+                        del self.recheck[d]
+            elif cfg.all_priority_paths and now - last_poll > 3600:
+                last_poll = now                     # network and FUSE folders give no events at all
                 threading.Thread(target=self.poll_priority, daemon=True).start()
 
-    def enqueue_tree(self, top: str):
-        """Scan a file or a whole folder now (from the app's "Scan a folder")."""
+    def enqueue_tree(self, top: str, proc: str = "user request", prio: int = 0, limit: int = 200_000):
+        """Scan a file or a whole folder now (the app's "Scan a folder", or a
+        folder that was just moved into place)."""
         from .sweep import walk
         files = [top] if os.path.isfile(top) else walk(top, self.cfg, same_dev=False)
         now = time.time()
-        with self.work_cv:
-            for p in files:
-                heapq.heappush(self.work, (0, now, p, "user request"))
-            self.work_cv.notify_all()
+        n = 0
+        for p in files:
+            with self.work_cv:
+                heapq.heappush(self.work, (prio, now, p, proc))
+                self.work_cv.notify()
+            n += 1
+            if n >= limit:
+                log(f"{top}: more than {limit} files, the rest is left to the next check")
+                break
 
     def poll_priority(self):
         if not Clamd(self.cfg.clamd_socket).ping():
@@ -208,12 +346,12 @@ class Daemon:
         last_commit = time.time()
         while not self.stop.is_set():
             try:
-                path, proc = self.ransom_q.get(timeout=2)
+                path, proc, pid, what = self.ransom_q.get(timeout=2)
             except queue.Empty:
                 path = None
             if path:
                 try:
-                    det.feed(path, proc)
+                    det.feed(path, proc, pid, what)
                 except Exception as e:
                     log(f"ransom detector error {path}: {e}")
             if time.time() - last_commit > 5:
@@ -243,8 +381,9 @@ class Daemon:
             # an untrusted inventory is worthless: forget it, everything is rescanned
             idx.db.execute("DELETE FROM files")
             idx.db.execute("DELETE FROM hashes")
-            idx.meta_set("needs_full_sweep", True)
             idx.commit()
+            return True
+        return False
 
     def anchorer(self):
         idx = Index(INDEX_PATH, self.vault)
@@ -264,11 +403,11 @@ class Daemon:
 
     def run(self, workers: int = 2):
         idx = Index(INDEX_PATH, self.vault)
-        self.check_anchor(idx)
+        catch_up = "inventory was rolled back" if self.check_anchor(idx) else None
         clean = idx.meta_get("clean_shutdown", True)
         if not clean:
             idx.event("gap", "previous run did not stop cleanly: a sweep will catch up")
-            idx.meta_set("needs_full_sweep", True)
+            catch_up = catch_up or "previous run did not stop cleanly"
         idx.meta_set("clean_shutdown", False)
         idx.event("daemon_start", f"roots={roots(self.cfg)} priority={self.cfg.all_priority_paths}")
         idx.commit()
@@ -281,6 +420,8 @@ class Daemon:
                     for i in range(workers)]
         for th in threads:
             th.start()
+        if catch_up:
+            self.start_sweep(catch_up)        # what changed while nobody was watching
 
         def _stop(*_):
             self.stop.set()

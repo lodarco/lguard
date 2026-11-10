@@ -6,5 +6,20 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/lguard/bin/lguard-freshclam --quiet
+# Talks to the network, so it never runs as root.
+User=lguard-clamav
+Group=lguard
 Nice=10
 IOSchedulingClass=idle
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lguard/clamav /var/log/lguard
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes

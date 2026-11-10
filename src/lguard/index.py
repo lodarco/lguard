@@ -59,7 +59,8 @@ class FileRow:
     signature: str | None
     db_version: int
     scanned_at: float
-    verified_at: float = 0.0   # last full re-hash (deep verification)
+    verified_at: float = 0.0   # last time the content was read again and re-checked
+    first_seen: float = 0.0    # when this path first entered the inventory
 
     def identity(self):
         return (self.dev, self.ino, self.size, self.mtime_ns, self.ctime_ns)
@@ -78,6 +79,8 @@ class Index:
         self.v = vault
         self.tamper_count = 0
         self.on_tamper = None          # callback(table, detail)
+        self.readonly = readonly
+        self._counters: dict[str, dict] = {}      # day -> counters not yet written
         if readonly:
             self.db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60,
                                       isolation_level=None)
@@ -90,6 +93,9 @@ class Index:
             self.db.executescript(SCHEMA)
             if new:
                 os.chmod(path, 0o600)
+        # A record stored as text instead of bytes (someone edited the file)
+        # must fail authentication like any other forgery, not raise.
+        self.db.text_factory = bytes
 
     def close(self):
         self.commit()
@@ -103,6 +109,8 @@ class Index:
     def commit(self):
         if self.db.in_transaction:
             self.db.execute("COMMIT")
+        if self._counters:
+            self.flush_counters()
 
     def _tamper(self, table: str, detail: str):
         self.tamper_count += 1
@@ -118,8 +126,8 @@ class Index:
         if not r:
             return None
         try:
-            return self.v.open(table, rid, r[0], r[1])
-        except TamperError:
+            return self.v.open(table, rid, bytes(r[0]), bytes(r[1]))
+        except (TamperError, TypeError, ValueError):
             self._tamper(table, f"record for {key!r} failed authentication")
             return None
 
@@ -137,9 +145,9 @@ class Index:
         """Decrypt every record of a table (sweeps, verify, GUI lists)."""
         for rid, nonce, ct in self.db.execute(f"SELECT id, nonce, ct FROM {table}"):
             try:
-                yield self.v.open(table, rid, nonce, ct)
-            except TamperError:
-                self._tamper(table, f"record {rid.hex()[:12]} failed authentication")
+                yield self.v.open(table, bytes(rid), bytes(nonce), bytes(ct))
+            except (TamperError, TypeError, ValueError):
+                self._tamper(table, f"record {bytes(rid).hex()[:12]} failed authentication")
 
     # --- files -----------------------------------------------------------
     def get(self, path: str) -> FileRow | None:
@@ -176,11 +184,25 @@ class Index:
         return bool(digest) and self._get("allow", digest) is not None
 
     def allow(self, digest: str, signature: str | None, note: str = ""):
-        self._put("allow", digest, {"signature": signature, "note": note, "ts": time.time()})
+        self._put("allow", digest, {"digest": digest, "signature": signature, "note": note, "ts": time.time()})
         self.ledger("allow", {"digest": digest, "signature": signature, "note": note})
 
-    def allowlist(self):
-        return list(self._iter("allow"))
+    def unallow(self, digest: str, note: str = ""):
+        """Take back "trust": the content is scanned and judged again."""
+        self._del("allow", digest)
+        self._del("hashes", digest)
+        self.ledger("unallow", {"digest": digest, "note": note})
+
+    def allowlist(self) -> list[dict]:
+        """Content the user trusted and has not taken back, newest first."""
+        out: dict[str, dict] = {}
+        for e in reversed(self.ledger_entries(kinds={"allow", "unallow"})):     # oldest first
+            if e["kind"] == "allow":
+                out[e["digest"]] = {"digest": e["digest"], "signature": e.get("signature"),
+                                    "note": e.get("note"), "ts": e["ts"]}
+            else:
+                out.pop(e["digest"], None)
+        return sorted((v for d, v in out.items() if self.is_allowed(d)), key=lambda v: v["ts"], reverse=True)
 
     # --- meta ------------------------------------------------------------
     def meta_get(self, key: str, default=None):
@@ -192,21 +214,35 @@ class Index:
 
     # --- daily counters (graphs) -----------------------------------------
     def bump(self, scanned=0, cached=0, nbytes=0, findings=0):
-        """Per-day counters. Several processes add to them, so the
-        read-modify-write runs in one short IMMEDIATE transaction."""
-        day = time.strftime("%Y-%m-%d")
-        self.commit()
+        """Per-day counters. Kept in memory and written with the next
+        commit(): one small write every few seconds, not one per file."""
+        d = self._counters.setdefault(time.strftime("%Y-%m-%d"),
+                                      {"scanned": 0, "cached": 0, "bytes": 0, "findings": 0})
+        d["scanned"] += scanned
+        d["cached"] += cached
+        d["bytes"] += nbytes
+        d["findings"] += findings
+
+    def flush_counters(self):
+        """Several processes add to the same day, so the read-modify-write
+        runs in one short IMMEDIATE transaction."""
+        pending, self._counters = self._counters, {}
+        if self.readonly:
+            return
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            d = self._get("daily", day) or {"day": day, "scanned": 0, "cached": 0, "bytes": 0, "findings": 0}
-            d["scanned"] += scanned
-            d["cached"] += cached
-            d["bytes"] += nbytes
-            d["findings"] += findings
-            self._put("daily", day, d)
+            for day, add in pending.items():
+                d = self._get("daily", day) or {"day": day, "scanned": 0, "cached": 0, "bytes": 0, "findings": 0}
+                for k, v in add.items():
+                    d[k] = d.get(k, 0) + v
+                self._put("daily", day, d)
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
+            for day, add in pending.items():         # keep them for the next try
+                cur = self._counters.setdefault(day, {"scanned": 0, "cached": 0, "bytes": 0, "findings": 0})
+                for k, v in add.items():
+                    cur[k] += v
             raise
 
     def daily(self, days: int = 30):
@@ -243,8 +279,8 @@ class Index:
         out = []
         for seq, ts, nonce, ct in self.db.execute(q):
             try:
-                d = self.v.open("ledger", seq.to_bytes(8, "big"), nonce, ct)
-            except TamperError:
+                d = self.v.open("ledger", seq.to_bytes(8, "big"), bytes(nonce), bytes(ct))
+            except (TamperError, TypeError, ValueError, AttributeError):
                 self._tamper("ledger", f"entry {seq} failed authentication")
                 continue
             if kinds and d.get("kind") not in kinds:
@@ -263,12 +299,15 @@ class Index:
                 "SELECT seq, ts, nonce, ct, chain FROM ledger ORDER BY seq"):
             if seq != expect:
                 problems.append(f"gap: expected entry {expect}, found {seq}")
-            calc = self.v.chain(prev, seq, ts, nonce, ct)
+            try:
+                calc = self.v.chain(bytes(prev), seq, ts, bytes(nonce), bytes(ct))
+            except (TypeError, ValueError, AttributeError):
+                calc = None
             if calc != chain:
                 problems.append(f"entry {seq}: chain mismatch (edited, inserted or reordered)")
             try:
-                self.v.open("ledger", seq.to_bytes(8, "big"), nonce, ct)
-            except TamperError:
+                self.v.open("ledger", seq.to_bytes(8, "big"), bytes(nonce), bytes(ct))
+            except (TamperError, TypeError, ValueError, AttributeError):
                 problems.append(f"entry {seq}: content failed authentication")
             prev, expect = chain, seq + 1
         return problems

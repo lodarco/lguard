@@ -84,6 +84,7 @@ class Scanner:
         cfg = self.cfg
         if cfg.is_excluded(path):
             return Result(path, "skipped", detail="excluded")
+        soft = cfg.is_soft_excluded(path)
         try:
             st = os.lstat(path)
         except FileNotFoundError:
@@ -98,8 +99,14 @@ class Scanner:
         row = self.index.get(path)
         same = row is not None and row.identity() == identity_of(st)
         if same and not force:
-            fresh = not row.risky or row.db_version >= dbver
-            if row.verdict in BAD or (row.verdict in ("clean", "warning") and fresh):
+            # New signatures are tried on risky files while they are new (a
+            # fresh threat is usually recognised days after it appears) and
+            # always in the category folders. Everything else is re-checked
+            # in rotation by the full disk scan.
+            born = row.first_seen or row.scanned_at or 0
+            recent = time.time() - born < cfg.sweep_retro_days * 86400
+            stale = row.risky and row.db_version < dbver and (recent or cfg.is_priority(path))
+            if row.verdict in BAD or (row.verdict in ("clean", "warning", "partial") and not stale):
                 self.index.bump(cached=1)
                 return Result(path, row.verdict, row.signature, cached=True)
 
@@ -113,12 +120,17 @@ class Scanner:
             fst = os.fstat(fd)
             if (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino) or not stat.S_ISREG(fst.st_mode):
                 return Result(path, "skipped", detail="changed while opening")
-            st = fst
-            return self._scan_open(path, fd, st, dbver, process)
+            if soft and not filetype.is_program(os.pread(fd, 8, 0)):
+                return Result(path, "skipped", detail="cache or log data")
+            return self._scan_open(path, fd, fst, dbver, process, row=row)
         finally:
             os.close(fd)
 
-    def _scan_open(self, path, fd, st, dbver, process) -> Result:
+    def _scan_open(self, path, fd, st, dbver, process, row=None, digest=None, current_only=False) -> Result:
+        """Scan the open file. `digest` is passed when the caller has just
+        hashed it; current_only = accept a remembered verdict for this
+        content only if it was made with the current signatures (full disk
+        scan)."""
         cfg = self.cfg
         head = os.pread(fd, filetype.HEAD, 0)
         kind = filetype.kind(head)
@@ -126,7 +138,8 @@ class Scanner:
             kind = "iso"
         ext = filetype.ext_of(path)
         risky = filetype.is_risky(kind, ext)
-        digest = _digest(fd, st.st_size, cfg.hash_max) if st.st_size else None
+        if digest is None and st.st_size:
+            digest = _digest(fd, st.st_size, cfg.hash_max)
 
         verdict, signature, cached = "clean", None, False
         if st.st_size == 0:
@@ -136,25 +149,35 @@ class Scanner:
         else:
             # 1) content already known?
             hv = self.index.hash_verdict(digest) if digest else None
-            if hv and (hv["db_version"] >= dbver or not risky) and hv["verdict"] != "error":
+            usable = hv and hv["verdict"] != "error" and (
+                hv["db_version"] >= dbver or (not current_only and not risky))
+            if usable:
                 verdict, signature, cached = hv["verdict"], hv["signature"], True
             else:
                 try:
-                    if st.st_size <= cfg.full_scan_max:
+                    media = kind in filetype.MEDIA_KINDS
+                    whole = st.st_size <= cfg.full_scan_max and not (media and st.st_size > cfg.media_partial_min)
+                    if whole:
                         r = self.clamd.scan_fd(fd)
                     else:
                         r = self.clamd.scan_partial(fd, st.st_size, cfg.partial_chunk)
-                    verdict = "infected" if r.infected else "clean"
-                    signature = r.signature
+                    if r.infected:
+                        verdict, signature = "infected", r.signature
+                    elif r.limited or (not whole and not media):
+                        # too big or too deep for the engine: say so, never "clean"
+                        verdict, signature = "partial", r.signature or "Lguard.Limits.TooLarge"
+                    else:
+                        verdict, signature = "clean", r.signature
                     if digest:
                         self.index.put_hash(digest, verdict, signature, dbver)
                 except (ClamdError, OSError) as e:
                     verdict, signature = "error", None
                     self.log(f"clamd error on {path}: {e}")
-            # 2) torrent / media-folder heuristics (path dependent, never cached by hash)
-            # (also when clamd failed: these need no signatures)
-            if verdict in ("clean", "error") and cfg.is_priority(path):
-                hv2 = filetype.torrent_verdict(path, kind, fd)
+            # 2) fake-media heuristics in the category folders (path
+            # dependent, never cached by hash; also when the engine failed:
+            # these need no signatures)
+            if verdict in ("clean", "partial", "error") and cfg.is_priority(path):
+                hv2 = filetype.media_verdict(path, kind, fd, cfg.mode_of(path))
                 if hv2:
                     verdict, signature = hv2
 
@@ -166,12 +189,15 @@ class Scanner:
         res = Result(path, verdict, signature, cached=cached,
                      detail="content already known (re-hashed, same SHA-256)" if cached else None)
         if verdict in BAD or verdict == "warning":
-            self._act(res, fd, st, digest, process)
+            known = row is not None and row.verdict == verdict and row.signature == signature
+            if not (known and verdict == "warning"):      # a standing warning is reported once
+                self._act(res, fd, st, digest, process)
         if res.action != "quarantined":
             now = time.time()
+            born = (row.first_seen or row.scanned_at) if row is not None else now
             self.index.put(FileRow(path, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
                                    st.st_ctime_ns, digest, kind, int(risky), verdict, signature,
-                                   dbver, now, verified_at=now))
+                                   dbver, now, verified_at=now, first_seen=born or now))
         else:
             self.index.forget(path)
         return res
@@ -185,7 +211,8 @@ class Scanner:
                 qid = quarantine.quarantine(cfg, res.path, fd, st, digest, sig, self.log)
                 res.action = "quarantined"
                 self.index.add_finding(res.path, digest, level, sig, "quarantined", qid, process)
-                notify(cfg, t(f"{level}_title"), t("quarantined", sig=sig, path=res.path), "high")
+                notify(cfg, t(f"{level}_title"), t("quarantined", sig=sig, path=res.path), "high",
+                       covered=bool(self.on_finding))
             except Exception as e:
                 res.action = "reported"
                 res.detail = f"quarantine failed: {e}"
@@ -197,7 +224,8 @@ class Scanner:
             res.action = "reported"
             self.index.add_finding(res.path, digest, level, sig, "reported", None, process)
             prio = {"critical": "urgent", "warning": "default"}.get(level, "high")
-            notify(cfg, t(f"{level}_title"), t("reported", sig=sig, path=res.path), prio)
+            notify(cfg, t(f"{level}_title"), t("reported", sig=sig, path=res.path), prio,
+                   covered=bool(self.on_finding))
         self.index.commit()
         if self.on_finding:
             try:

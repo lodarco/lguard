@@ -6,6 +6,7 @@ lstat() calls: unchanged files are answered from the index in microseconds.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import time
 
@@ -21,7 +22,8 @@ def local_mounts() -> list[str]:
     with open("/proc/self/mounts") as f:
         for line in f:
             dev, mnt, fstype, *_ = line.split()
-            mnt = mnt.encode().decode("unicode_escape")
+            # the kernel writes space, tab, newline and backslash as \ooo
+            mnt = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), mnt)
             if fstype in LOCAL_FS and not mnt.startswith(("/snap/", "/var/lib/snapd/", "/boot/efi")):
                 out.append(mnt)
             elif fstype == "tmpfs" and mnt == "/dev/shm":
@@ -150,18 +152,21 @@ class Sweep:
         r = self.scanner.scan(path, force=force)
         self.stats["seen"] += 1
         self.stats["bytes"] += size
-        if r.cached:
-            self.stats["cached"] += 1
-        elif r.verdict != "skipped":
-            self.stats["scanned"] += 1
-        if r.verdict in ("infected", "suspicious", "warning"):
-            self.stats["findings"] += 1
-        if r.verdict == "error":
-            self.stats["errors"] += 1
+        self._count(r)
         if self.stats["seen"] % 500 == 0:
             self.index.commit()
             self.progress(path=path, **self.stats)
         return r
+
+    def _count(self, r):
+        if r.cached:
+            self.stats["cached"] += 1
+        elif r.verdict != "skipped":
+            self.stats["scanned"] += 1
+        if r.verdict in ("infected", "suspicious") or (r.verdict == "warning" and r.action):
+            self.stats["findings"] += 1
+        if r.verdict == "error":
+            self.stats["errors"] += 1
 
     def run_paths(self, tops: list[str], force=False):
         for top in tops:
@@ -200,18 +205,14 @@ class Sweep:
     def maintenance(self, verify_budget: int | None = None):
         """One decrypting pass over the inventory, then:
           - prune rows of files that are gone,
-          - retro-hunt: risky files seen recently get newer signatures,
-          - deep verification: re-hash the files verified longest ago
-            (priority folders and risky types first) within a byte budget;
-            content that changed under an unchanged identity is tampering,
-          - refresh the verdict counters shown by status and the GUI."""
+          - refresh the verdict counters shown by status and the GUI,
+          - full disk scan slice: read again the files checked longest ago
+            (category folders and risky types first) within a byte budget."""
         cfg = self.cfg
-        dbver = self.scanner.db_version
-        since = time.time() - cfg.sweep_retro_days * 86400
         counts = {"files": 0, "clean": 0, "infected": 0, "suspicious": 0, "warning": 0,
-                  "error": 0, "skipped": 0, "bytes": 0}
+                  "partial": 0, "error": 0, "skipped": 0, "bytes": 0}
         kinds: dict[str, int] = {}
-        gone, retro, verify = [], [], []
+        gone, verify = [], []
         for row in self.index.iter_files():
             if self.stop:
                 return
@@ -229,11 +230,9 @@ class Sweep:
             counts[row.verdict] = counts.get(row.verdict, 0) + 1
             counts["bytes"] += row.size
             kinds[row.kind or "unknown"] = kinds.get(row.kind or "unknown", 0) + 1
-            if row.risky and row.db_version < dbver and (row.scanned_at >= since or cfg.is_priority(row.path)):
-                retro.append(row.path)
-            if row.verdict == "clean" and row.size:
+            if row.verdict in ("clean", "partial") and row.size:
                 urgency = (0 if cfg.is_priority(row.path) else 1 if row.risky else 2)
-                verify.append((urgency, row.verified_at or 0, row.path, row.size, row.digest))
+                verify.append((urgency, row.verified_at or 0, row.path, row.size))
         for p in gone:
             self.index.forget(p)
         self.index.meta_set("counts", {**counts, "kinds": kinds, "at": time.time()})
@@ -241,27 +240,25 @@ class Sweep:
         cutoff = time.time() - cfg.verify_cycle_days * 86400
         recent = sum(1 for c in verify if (c[1] or 0) >= cutoff)
         self.index.meta_set("verify_progress", {"percent": int(recent * 100 / max(1, len(verify))), "at": time.time()})
-        if retro:
-            self.index.event("retro_hunt", f"{len(retro)} files, signatures {dbver}")
-        self.phase = "signatures"
-        for p in retro:
-            if self.stop:
-                return
-            self._scan(p, force=True)
-        self.index.commit()
         self.deep_verify(verify, cfg.verify_budget_bytes if verify_budget is None else verify_budget)
 
     def deep_verify(self, candidates, budget: int):
+        """Full disk scan: every chosen file is read again from the first
+        byte to the last. Its SHA-256 must still be the one in the inventory
+        (content changed under an unchanged identity = tampering), and the
+        content is checked by the engine again unless this very content was
+        already checked with the current signatures."""
         from .index import identity_of
         from .scanner import _digest
         cutoff = time.time() - self.cfg.verify_cycle_days * 86400
         # files never verified or verified before the cycle cutoff first,
-        # within that: priority folders, then risky types, then oldest
+        # within that: category folders, then risky types, then oldest
         candidates.sort(key=lambda c: (c[1] >= cutoff, c[0], c[1]))
         used, n, mism = 0, 0, 0
         self.phase = "fulldisk"
         goal = min(budget, sum(c[3] for c in candidates)) or 1
-        for urgency, verified_at, path, size, digest in candidates:
+        dbver = self.scanner.db_version
+        for urgency, verified_at, path, size in candidates:
             if self.stop or used >= budget:
                 break
             self.check_pause()
@@ -273,25 +270,30 @@ class Sweep:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOATIME)
             except OSError:
                 continue
+            changed = False
             try:
                 st = os.fstat(fd)
                 if identity_of(st) != row.identity():
                     self._scan(path)             # changed normally: plain rescan
                     continue
-                now_digest = _digest(fd, st.st_size)
+                now_digest = _digest(fd, st.st_size, self.cfg.hash_max)
+                changed = now_digest != row.digest
+                if not changed:
+                    self._count(self.scanner._scan_open(path, fd, st, dbver, None, row=row,
+                                                        digest=now_digest, current_only=True))
+            except Exception as e:
+                self.log(f"full disk scan: {path}: {e}")
+                continue
             finally:
                 os.close(fd)
             used += size
             n += 1
-            if now_digest != row.digest:
+            if changed:
                 mism += 1
                 self.index.event("tamper_content",
                                  f"{path}: content changed but size/mtime/ctime/inode did not")
                 self.scanner.tamper_alarm(path, "content changed under an unchanged identity")
                 self._scan(path, force=True)
-            else:
-                row.verified_at = time.time()
-                self.index.put(row)
             if n % 200 == 0:
                 self.index.commit()
         self.index.commit()

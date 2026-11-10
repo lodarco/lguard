@@ -1,8 +1,10 @@
 # Lguard settings. Every key is optional; see `lguard --help` and the README.
 # language = "en"            # en, de, es
-# categories = { torrents = ["/srv/downloads"], plex = ["/srv/plex"], jellyfin = ["/srv/jellyfin"] }
+# categories = { downloads = ["/srv/downloads"], plex = ["/srv/plex"], jellyfin = ["/srv/jellyfin"] }
+# category_modes = { downloads = "downloads", plex = "media" }   # media = programs there are quarantined
 # data_paths = ["/home"]      # where the ransomware shield looks
 # notify_command = ["/usr/local/bin/my-phone-alert", "{priority}", "{title}", "{message}"]
 # freeze_commands = []        # what to stop when ransomware is detected
+# ransom_stop_process = "untrusted"   # suspend the program: untrusted | always | never
 # unfreeze_commands = []
 clamd_socket = "/run/lguard-clamd/clamd.sock"

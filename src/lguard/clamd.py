@@ -21,6 +21,7 @@ class ClamResult:
     infected: bool
     signature: str | None
     raw: str
+    limited: bool = False     # the engine stopped at one of its limits: not fully scanned
 
 
 def _recv_all(sock: socket.socket) -> str:
@@ -39,14 +40,17 @@ def _parse(reply: str) -> ClamResult:
     # "fd[10]: OK" | "stream: Eicar-Test-Signature FOUND" | "...: <msg> ERROR"
     body = reply.split(": ", 1)[1] if ": " in reply else reply
     if body.endswith(" FOUND"):
-        return ClamResult(True, body[: -len(" FOUND")], reply)
+        sig = body[: -len(" FOUND")]
+        if sig.startswith("Heuristics.Limits.Exceeded"):
+            return ClamResult(False, sig, reply, limited=True)
+        return ClamResult(True, sig, reply)
     if body == "OK":
         return ClamResult(False, None, reply)
     raise ClamdError(reply)
 
 
 class Clamd:
-    def __init__(self, socket_path: str, timeout: float = 300.0):
+    def __init__(self, socket_path: str, timeout: float = 1800.0):
         self.socket_path = socket_path
         self.timeout = timeout
 
@@ -118,11 +122,13 @@ class Clamd:
         return self.scan_stream(parts())
 
 
-def database_version(db_dir: str = "/var/lib/clamav") -> int:
+def database_version(db_dirs=("/var/lib/lguard/clamav", "/var/lib/clamav")) -> int:
     """Version of the daily signature database, from its file header
-    ("ClamAV-VDB:<date>:<version>:...")."""
+    ("ClamAV-VDB:<date>:<version>:..."). Lguard's own database first."""
     best = 0
-    for name in ("daily.cld", "daily.cvd"):
+    for db_dir, name in ((d, n) for d in db_dirs for n in ("daily.cld", "daily.cvd")):
+        if best:
+            break
         try:
             with open(os.path.join(db_dir, name), "rb") as f:
                 head = f.read(512).decode("ascii", "replace")
@@ -137,7 +143,9 @@ def database_version(db_dir: str = "/var/lib/clamav") -> int:
 def engine_version() -> str:
     import subprocess
     try:
-        out = subprocess.run(["clamd", "--version"], capture_output=True, text=True, timeout=10).stdout
+        exe = "/opt/lguard/clamav/sbin/clamd"
+        out = subprocess.run([exe if os.path.exists(exe) else "clamd", "--version"],
+                             capture_output=True, text=True, timeout=10).stdout
         return out.split("/")[0].strip() or "ClamAV"
     except Exception:
         return "ClamAV"

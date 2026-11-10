@@ -3,7 +3,9 @@ Description=Lguard scan engine (private ClamAV)
 After=lguard-freshclam.service
 
 [Service]
-ExecStartPre=/bin/sh -c 'ls /var/lib/lguard/clamav/*.c?d >/dev/null 2>&1 || /opt/lguard/bin/lguard-freshclam --quiet'
+# No signatures yet (first start without network): fail and try again; the
+# updater fetches them as soon as it can.
+ExecStartPre=/bin/sh -c 'ls /var/lib/lguard/clamav/*.c?d >/dev/null 2>&1'
 ExecStart=/opt/lguard/clamav/sbin/clamd --config-file=/etc/lguard/clamd.conf
 ExecReload=/bin/kill -USR2 $MAINPID
 # Runs as its own user from the start; systemd creates the socket folder
@@ -16,13 +18,36 @@ Nice=10
 IOSchedulingClass=idle
 MemoryHigh=2500M
 Restart=on-failure
+RestartSec=30
 TimeoutStartSec=600
-# hardening
+# The engine is the part that reads hostile files, so it gets the least:
+# files reach it only as open descriptors over its socket; it has no
+# network, cannot change its own signatures, and sees no other user's data.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
 ProtectSystem=strict
-ReadWritePaths=/var/lib/lguard/clamav /var/tmp /run/lguard-clamd /var/log/lguard
-ProtectHome=read-only
+ReadWritePaths=/var/tmp /run/lguard-clamd
+ReadOnlyPaths=/var/lib/lguard/clamav
+ProtectHome=yes
 PrivateTmp=no
+PrivateDevices=yes
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

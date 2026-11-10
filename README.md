@@ -1,35 +1,52 @@
 # Lguard
 
-Antivirus, torrent guard and ransomware shield for Linux desktops and home servers.
+Antivirus, download guard and ransomware shield for Linux desktops and home servers.
 
-Lguard watches every file as it is written, keeps a tamper-proof inventory of
-what it has checked, looks after your Torrents, Plex and Jellyfin folders, and
-freezes your backups the moment something starts encrypting your files.
+Lguard watches every file as it is written or moved into place, keeps a sealed
+inventory of what it has checked, looks after your download folders and your
+Plex and Jellyfin libraries, and freezes your backups the moment something
+starts encrypting your files.
 
 ## Features
 
 - **Real-time protection**: fanotify watches whole filesystems; every file
-  is checked as soon as it is written. There are no per-directory watch limits.
+  is checked as soon as it is written, and (Linux 5.9 or newer) as soon as it
+  is renamed into place, which is how browsers and download clients finish a
+  download. There are no per-directory watch limits. A disk plugged in later
+  (a USB stick) is picked up within seconds and checked.
 - **Incremental scanning**: the first scan reads every file once. After that
   only changed files are scanned. Identical content found elsewhere (mirrors,
-  backups) is recognised by its SHA-256 and not scanned again.
-- **Full disk scan**: a little of every disk is re-read each night, so every
-  file is checked again at least once a month. You can also start a full scan
-  by hand. Scans can be paused, with automatic resume.
-- **Torrents, Plex, Jellyfin and your own categories**: downloads are checked
-  as soon as they finish. Fake movies (programs, double extensions such as
-  `Movie.mp4.exe`, "videos" that are really archives) are quarantined even
-  when no virus signature knows them yet.
-- **Ransomware shield**: documents that suddenly turn into random data, or one
-  program rewriting hundreds of existing files, raise an alarm and run your
-  freeze commands (stop sync, stop backup jobs) so encrypted files cannot
-  overwrite good copies.
-- **Quarantine** with restore, restore-and-trust and delete.
-- **Tamper-proof inventory**: every record is encrypted and authenticated
-  (AES-256-GCM, blind HMAC index). The scan history is a hash chain. The key
-  is sealed with `systemd-creds`, bound to the TPM 2.0 chip when the machine
-  has one. A record copied, edited or rolled back is detected and the file is
-  rescanned.
+  backups) is recognised by its SHA-256 and not scanned again. New signatures
+  are tried on recent programs, archives and documents every night.
+- **Full disk scan**: a slice of every disk is read again each night, so
+  every file is read from the first byte to the last and checked with the
+  current signatures at least once a month. You can also start a full scan by
+  hand. Scans can be paused; a pause always ends by itself.
+- **Nothing is called clean that was not checked**: archives and disk images
+  are scanned whole up to 2 GB. A file the engine could not go through
+  completely is recorded as "partly checked" and shown as such.
+- **Caches are not a hiding place**: cache, log and database folders are
+  skipped for their data, but a program found in one is always scanned.
+- **Downloads, Plex, Jellyfin and your own categories**, each either a
+  *media library* or a *downloads* folder. In a media library a program is
+  quarantined even when no signature knows it: films and music never need
+  one. In a downloads folder programs, installers and disk images are normal
+  and are scanned like everything else. In both, a name that pretends
+  (`Movie.mp4.exe`) or a "video" that is really a program or an archive is
+  quarantined.
+- **Ransomware shield**: documents that turn into random data, one program
+  rewriting hundreds of existing files, or one program deleting documents
+  while it writes unreadable files, raise an alarm. Your freeze commands
+  (stop sync, stop backup jobs) run so encrypted files cannot overwrite good
+  copies, and a program that is not part of the operating system is suspended
+  until you decide (`lguard resume-process`, or the button in the app).
+- **Quarantine** with restore, restore-and-trust and delete. Trust can be
+  taken back.
+- **Sealed inventory**: every record is encrypted and authenticated
+  (AES-256-GCM, blind HMAC index) and the scan history is a hash chain. The
+  key is sealed with `systemd-creds`, bound to the TPM 2.0 chip when the
+  machine has one. A record that was copied or edited fails authentication
+  and the file is scanned again. See *What the inventory protects against*.
 - **System integrity**: Lguard checks its own installation against a shipped
   SHA-256 manifest.
 - **Desktop app**: native look (follows the light/dark setting of GNOME or
@@ -48,7 +65,8 @@ system's versions of the same software:
 | Desktop app | Qt 6.8 LTS (PySide6, LGPLv3) |
 
 From the system it needs only glibc ≥ 2.28 and systemd. The desktop app also
-uses the desktop's own graphics libraries.
+uses the desktop's own graphics libraries. The scan engine keeps its
+signatures in memory: plan for about 1 GB of RAM.
 
 ## Supported systems
 
@@ -69,17 +87,59 @@ A server needs only the `lguard` package. Installing it creates the sealed
 key, downloads signatures, starts protection and begins the first scan in the
 background at the lowest priority.
 
-Settings are in `/etc/lguard/lguard.toml`. Folders chosen in the app are
-saved to `/etc/lguard/lguard.d/50-app.toml`.
+Settings are in `/etc/lguard/lguard.toml`. Folders chosen in the app
+(categories and their mode, folders the ransomware shield protects, folders
+not scanned or report-only) are saved to `/etc/lguard/lguard.d/50-app.toml`.
+
+Out of the box the ransomware shield alarms and suspends the program. To
+also protect your backups, tell it what to stop:
+
+```toml
+freeze_commands   = ["systemctl stop my-backup.timer", "pkill -STOP -x syncthing || true"]
+unfreeze_commands = ["pkill -CONT -x syncthing || true", "systemctl start my-backup.timer"]
+```
 
 ## Command line
 
 ```
-lguard status | verify | findings | history
+lguard status                  state of protection (no root needed)
+lguard verify | findings | history
 lguard scan <path>...          scan now
 lguard sweep [--full]          quick check of changed files / full disk scan
 lguard quarantine list | restore <id> [--allow] | delete <id>
+lguard trust list | remove <sha256>
 lguard freeze | unfreeze       backups and sync (ransomware shield)
+lguard resume-process          let a program the shield suspended continue
+```
+
+## What the inventory protects against
+
+The inventory answers "was this exact file already checked, and with what
+result" without anyone being able to forge the answer by editing the
+database: a record that was changed, moved to another file or written without
+the key fails authentication, the file is scanned again and the event is
+reported. The key never lies on disk in the clear, so a copied or
+offline-edited disk gains nothing.
+
+Two limits are worth knowing. A program that already runs as root can read
+the key like Lguard itself does. And an old copy of the *whole* state folder
+put back in place is accepted: Lguard notices a history that is shorter than
+the last one it sealed, but not a database and seal that were rolled back
+together. Neither can make a file with changed content pass: the full disk
+scan reads every file again and compares it with its recorded SHA-256.
+
+## What Lguard does not do
+
+It does not block a program from starting before it has been scanned: files
+are checked within seconds of being written, not at the moment of execution.
+Detection of known threats is ClamAV's. The ransomware shield reacts to what
+encryption looks like; encryption that keeps file headers intact and leaves
+the names alone is not recognised by it.
+
+## Tests
+
+```sh
+python3 -m unittest discover -s tests      # needs the "cryptography" module
 ```
 
 ## Building
@@ -106,7 +166,7 @@ your own forks; anything you distribute based on it must stay under the GPL
 with its source available.
 
 The repository accepts no outside collaborators; improvements are welcome as
-forks.
+forks. To report a security problem see [SECURITY.md](SECURITY.md).
 
 ## Licences of bundled components
 

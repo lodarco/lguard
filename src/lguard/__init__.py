@@ -1,2 +1,2 @@
-"""Lguard - antivirus, torrent guard and ransomware alarm for Linux."""
-__version__ = "0.1.8"
+"""Lguard - antivirus, download guard and ransomware shield for Linux."""
+__version__ = "0.2.0"

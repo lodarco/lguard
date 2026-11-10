@@ -32,7 +32,7 @@ Section: admin
 Priority: optional
 Description: $summary
  Lguard watches every file as it is written, keeps a tamper-proof inventory
- of what was scanned, checks torrent, Plex and Jellyfin downloads for fake
+ of what was scanned, checks downloads and Plex and Jellyfin libraries for fake
  movies and freezes backups when ransomware is detected. It ships its own
  scan engine and runtime and does not depend on the system's.
 EOC
@@ -69,7 +69,7 @@ Recommends:     $rec
 %define _build_id_links none
 
 %description
-Lguard antivirus, torrent guard and ransomware shield ($name).
+Lguard antivirus, download guard and ransomware shield ($name).
 
 %install
 cp -a /stage/$name/. %{buildroot}/
@@ -79,12 +79,12 @@ $(printf '%s\n' "$@")
 EOS
 }
 
-deb lguard "$here/stage/core" "Antivirus, torrent guard and ransomware shield for Linux" "$CORE_DEB_DEP" "$CORE_DEB_REC"
+deb lguard "$here/stage/core" "Antivirus, download guard and ransomware shield for Linux" "$CORE_DEB_DEP" "$CORE_DEB_REC"
 deb lguard-gui "$here/stage/gui" "Lguard desktop app: window, side notifications, widget" "$GUI_DEB_DEP" "$GUI_DEB_REC"
 
 R=$here/pkg-rpm; rm -rf "$R"; mkdir -p "$R" "$here/stage-rpm"
 rm -rf "$here/stage-rpm"/*; cp -a "$here/stage/core" "$here/stage-rpm/lguard"; cp -a "$here/stage/gui" "$here/stage-rpm/lguard-gui"
-{ spec lguard "Antivirus, torrent guard and ransomware shield for Linux" "$CORE_RPM_REQ" "$CORE_RPM_REC" \
+{ spec lguard "Antivirus, download guard and ransomware shield for Linux" "$CORE_RPM_REQ" "$CORE_RPM_REC" \
     /opt/lguard/python /opt/lguard/clamav /opt/lguard/bin /opt/lguard/licenses /opt/lguard/MANIFEST.sha256 \
     /usr/bin/lguard '%dir /etc/lguard' '%config(noreplace) /etc/lguard/*' '/usr/lib/systemd/system/lguard*' \
     /usr/share/polkit-1/actions/io.github.lodarco.lguard.policy /usr/share/doc/lguard

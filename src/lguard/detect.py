@@ -1,4 +1,4 @@
-"""Find where torrent clients download to and where Plex / Jellyfin keep
+"""Find where download clients save to and where Plex / Jellyfin keep
 their libraries, so the app can offer them ("Detected – Add")."""
 from __future__ import annotations
 
@@ -108,6 +108,21 @@ def jellyfin() -> list[str]:
     return _dirs(found)
 
 
+def browser_downloads() -> list[str]:
+    """Each user's Downloads folder (where browsers save)."""
+    found = []
+    for h in _homes():
+        found.append(os.path.join(h, "Downloads"))
+        try:
+            text = open(f"{h}/.config/user-dirs.dirs", errors="replace").read()
+            m = re.search(r'^XDG_DOWNLOAD_DIR="(.+)"$', text, re.M)
+            if m:
+                found.append(m.group(1).replace("$HOME", h))
+        except OSError:
+            pass
+    return found
+
+
 def suggestions() -> dict[str, list[str]]:
-    return {"torrents": _dirs(qbittorrent() + transmission() + deluge()),
+    return {"downloads": _dirs(qbittorrent() + transmission() + deluge() + browser_downloads()),
             "plex": plex(), "jellyfin": jellyfin()}

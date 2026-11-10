@@ -1,7 +1,6 @@
 [Unit]
 Description=Lguard nightly check (changed files, new signatures, full disk scan slice)
 After=lguard-clamd.service
-Conflicts=lguard-fullscan.service
 
 [Service]
 Type=oneshot
