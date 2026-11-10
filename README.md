@@ -98,6 +98,16 @@ build/test-install.sh docker.io/library/debian:12 ...   # install and test in cl
 Every build fails if any binary needs a newer glibc than 2.28
 (`build/check-glibc.sh`).
 
+## Licence
+
+Lguard is free software under the **GNU General Public License v3.0**
+(see [LICENSE](LICENSE)). You may use, study, change and share it, including
+your own forks; anything you distribute based on it must stay under the GPL
+with its source available.
+
+The repository accepts no outside collaborators; improvements are welcome as
+forks.
+
 ## Licences of bundled components
 
 ClamAV is GPL-2.0. Qt and PySide6 are LGPL-3.0; they ship as replaceable

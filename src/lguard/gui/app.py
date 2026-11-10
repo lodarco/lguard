@@ -12,7 +12,7 @@ import os
 import shutil
 import sys
 
-from PySide6.QtCore import QObject, QProcess, QSettings, Qt, QTimer
+from PySide6.QtCore import QObject, QProcess, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QPushButton,
                                QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
@@ -335,6 +335,11 @@ class MainWindow(QMainWindow):
                                           "Licences: /opt/lguard/licenses")
 
 
+class _Bridge(QObject):
+    """Carries "show the window" from the single-instance thread to the UI thread."""
+    show = Signal(str)
+
+
 # ------------------------------------------------------------------ the app
 class LguardApp:
     def __init__(self, args):
@@ -560,27 +565,38 @@ def main(argv=None):
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     qapp = QApplication(sys.argv[:1])
     # one Lguard per user: a second start just shows the running one
-    from PySide6.QtNetwork import QLocalServer, QLocalSocket
-    name = f"lguard-gui-{os.getuid()}" + ("-demo" if args.demo else "")
-    probe = QLocalSocket()
-    probe.connectToServer(name)
-    if not args.screenshot and probe.waitForConnected(300):
-        probe.write(b"show " + (args.page or "").encode() + (b" bg" if args.background else b"") + b"\n")
-        probe.waitForBytesWritten(300)
-        return 0
-    QLocalServer.removeServer(name)
-    server = QLocalServer()
-    server.listen(name)
+    # (plain Unix socket in the abstract namespace; no extra libraries)
+    import socket as _socket
+    name = f"\0lguard-gui-{os.getuid()}" + ("-demo" if args.demo else "")
+    if not args.screenshot:
+        probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        try:
+            probe.connect(name)
+            probe.sendall(b"show " + (args.page or "-").encode() + (b" bg" if args.background else b"") + b"\n")
+            probe.close()
+            return 0
+        except OSError:
+            probe.close()
     app = LguardApp(args)
+    bridge = _Bridge()
+    bridge.show.connect(lambda page: app.open_main(page or None))
+    if not args.screenshot:
+        srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        try:
+            srv.bind(name)
+            srv.listen(4)
 
-    def on_conn():
-        c = server.nextPendingConnection()
-        c.waitForReadyRead(300)
-        msg = bytes(c.readAll()).decode(errors="replace").split()
-        if msg and msg[0] == "show" and "bg" not in msg:
-            app.open_main(msg[1] if len(msg) > 1 and msg[1] != "bg" else None)
-        c.disconnectFromServer()
-    server.newConnection.connect(on_conn)
+            def serve():
+                while True:
+                    c, _a = srv.accept()
+                    msg = c.recv(256).decode(errors="replace").split()
+                    c.close()
+                    if msg and msg[0] == "show" and "bg" not in msg:
+                        bridge.show.emit(msg[1] if len(msg) > 1 and msg[1] != "-" else "")
+            import threading
+            threading.Thread(target=serve, daemon=True, name="single-instance").start()
+        except OSError:
+            pass
     if args.theme:
         app.on_setting("theme", args.theme)
     if args.screenshot:

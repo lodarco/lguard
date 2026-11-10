@@ -24,6 +24,22 @@ echo "--- quarantine"; lguard quarantine list
 test ! -e /root/eicar.com && test ! -e /srv/torrents/Film/Codec.exe && echo "RESULT: OK"
 '
 
+smoke_common='
+set -e
+lguard status >/dev/null 2>&1 || true
+lguard verify
+/opt/lguard/clamav/bin/clamscan --version
+lguard scan /etc/hostname >/dev/null 2>&1 || true      # no signatures here: must not crash
+QT_QPA_PLATFORM=offscreen timeout 90 lguard-gui --demo --screenshot /tmp/shots >/dev/null 2>&1 || true
+n=$(ls /tmp/shots 2>/dev/null | wc -l); echo "app pages rendered: $n"
+test "$n" -ge 10 && echo "RESULT: OK"
+'
+SMOKE=0; GUI_DEB=""; GUI_RPM=""
+if [ "${1:-}" = "--smoke" ]; then
+  SMOKE=1; shift
+  GUI_DEB="/out/lguard-gui_${VER}_amd64.deb"; GUI_RPM="/out/lguard-gui-${VER}-1.x86_64.rpm"
+fi
+
 if [ "${1:-}" = "--fetch-db" ]; then
   podman run --rm -v "$here/out:/out:ro,Z" -v "$DB:/var/lib/lguard/clamav:Z" docker.io/library/oraclelinux:8 bash -c "
     dnf -y -q install /out/lguard-$VER-1.x86_64.rpm >/dev/null 2>&1; chmod 711 /var/lib/lguard
@@ -40,15 +56,17 @@ for img in "$@"; do
       prep='export DEBIAN_FRONTEND=noninteractive
             if grep -qs "buster" /etc/os-release; then
               printf "deb http://archive.debian.org/debian buster main\ndeb http://archive.debian.org/debian-security buster/updates main\n" > /etc/apt/sources.list; fi
-            apt-get -qq update >/dev/null && apt-get -qq install -y /out/lguard_'"$VER"'_amd64.deb >/tmp/inst.log 2>&1 || { tail -20 /tmp/inst.log; exit 1; }
+            apt-get -qq update >/dev/null && apt-get -qq install -y /out/lguard_'"$VER"'_amd64.deb '"$GUI_DEB"' >/tmp/inst.log 2>&1 || { tail -20 /tmp/inst.log; exit 1; }
             grep -iE "lguard|manifest" /tmp/inst.log | tail -5' ;;
     *)
-      prep='dnf -y -q install /out/lguard-'"$VER"'-1.x86_64.rpm >/tmp/inst.log 2>&1 || { tail -20 /tmp/inst.log; exit 1; }
+      prep='dnf -y -q install /out/lguard-'"$VER"'-1.x86_64.rpm '"$GUI_RPM"' >/tmp/inst.log 2>&1 || { tail -20 /tmp/inst.log; exit 1; }
             grep -iE "lguard|manifest" /tmp/inst.log | tail -5' ;;
   esac
   podman run --rm -v "$here/out:/out:ro,Z" -v "$DB:/db:ro,Z" "$img" bash -c "
     $prep
     echo \"glibc: \$(ldd --version | head -1)\"
     echo \"key: \$(ls /var/lib/lguard/ | tr '\n' ' ')\"
-    $inner_common" 2>&1 | tail -40
+    $([ $SMOKE = 1 ] && echo "$smoke_common" || echo "$inner_common")" 2>&1 | tail -40 | tee /tmp/lguard-test.log
+  grep -q "RESULT: OK" /tmp/lguard-test.log || { echo "FAILED on $img"; failed=1; }
 done
+exit ${failed:-0}

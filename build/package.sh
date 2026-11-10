@@ -57,7 +57,7 @@ Name:           $name
 Version:        $VER
 Release:        1
 Summary:        $summary
-License:        Proprietary
+License:        GPL-3.0-only
 URL:            https://github.com/lodarco/lguard
 BuildArch:      x86_64
 AutoReqProv:    no
@@ -87,7 +87,7 @@ rm -rf "$here/stage-rpm"/*; cp -a "$here/stage/core" "$here/stage-rpm/lguard"; c
 { spec lguard "Antivirus, torrent guard and ransomware shield for Linux" "$CORE_RPM_REQ" "$CORE_RPM_REC" \
     /opt/lguard/python /opt/lguard/clamav /opt/lguard/bin /opt/lguard/licenses /opt/lguard/MANIFEST.sha256 \
     /usr/bin/lguard '%dir /etc/lguard' '%config(noreplace) /etc/lguard/*' '/usr/lib/systemd/system/lguard*' \
-    /usr/share/polkit-1/actions/io.github.lodarco.lguard.policy
+    /usr/share/polkit-1/actions/io.github.lodarco.lguard.policy /usr/share/doc/lguard
   printf '\n%%post\n[ "$1" -eq 1 ] && export LGUARD_FIRST_INSTALL=1\n'; sed '1d' "$SCR/post-install.sh"
   printf '\n%%preun\nif [ "$1" -eq 0 ]; then\n'; sed '1d' "$SCR/pre-remove.sh"; printf 'fi\n'
 } > "$R/lguard.spec"

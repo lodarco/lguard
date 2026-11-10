@@ -57,6 +57,18 @@ ClamAV is GPL-2.0: its complete source is the clamav tarball listed above
 project on request for three years from this release.
 EOF
 cp "$here/clamav/SHA256SUMS" "$C/opt/lguard/licenses/SHA256-SOURCES.txt"
+install -m 644 "$repo/LICENSE" "$C/opt/lguard/licenses/LGUARD-LICENSE.txt"
+install -D -m 644 /dev/stdin "$C/usr/share/doc/lguard/copyright" <<COPY
+Lguard - antivirus, torrent guard and ransomware shield for Linux
+Copyright (C) 2026 lodarco
+https://github.com/lodarco/lguard
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License version 3 as published by
+the Free Software Foundation. Full text: /opt/lguard/licenses/LGUARD-LICENSE.txt
+
+Bundled third-party components and their licences: /opt/lguard/licenses
+COPY
 
 # manifest: SHA-256 of every shipped file under /opt/lguard (self-check)
 ( cd "$C" && find opt/lguard -type f ! -name MANIFEST.sha256 -print0 | sort -z | xargs -0 sha256sum ) \
