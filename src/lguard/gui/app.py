@@ -368,7 +368,7 @@ class LguardApp:
         self.tray = None
         self._tray_state = None
         if QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray = QSystemTrayIcon(icon("shield-check", theme.LIGHT["success"], 32))
+            self.tray = QSystemTrayIcon(icon("shield-check", theme.DARK["success"], 32))
             m = QMenu()
             self.tray_status = QAction("Lguard", m)
             self.tray_status.setEnabled(False)
@@ -471,10 +471,10 @@ class LguardApp:
         sw = st.get("sweep") or {}
         frozen = st.get("frozen", "no") not in ("no", "", None)
         if not st.get("realtime") or not st.get("engine_ok") or frozen:
-            state, name, col, text = "alert", "shield-alert", theme.LIGHT["warning"] if not frozen else "#e01b24", \
+            state, name, col, text = "alert", "shield-alert", theme.DARK["warning"] if not frozen else theme.DARK["destructive_text"], \
                 (_("Backups are frozen") if frozen else _("Protection is off"))
         elif t:
-            state, name, col = "scan", "shield", theme.LIGHT["accent"]
+            state, name, col = "scan", "shield", theme.DARK["accent"]
             text = t[0] + (f" {t[2]}%" if t[2] is not None else "")
         else:
             state, name, col, text = "ok", "shield-check", "#26a269", _("You are protected")

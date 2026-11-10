@@ -47,6 +47,9 @@ Changed
   the next nightly run.
 - `lguard status` works without root. New: `lguard trust`, `lguard
   resume-process`.
+- App: new look (neutral dark with a steel sheen, clean light theme, one blue
+  accent) with the Inter and Cascadia Mono fonts bundled, so it looks the same
+  on every desktop.
 - App: trust can be removed; folders protected by the ransomware shield and
   the mode of each category can be set; no double notifications.
 - Daily counters are written in batches (one write every few seconds instead

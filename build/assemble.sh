@@ -43,8 +43,11 @@ install -d "$G/usr/bin"; ln -sf /opt/lguard/gui/bin/lguard-gui "$G/usr/bin/lguar
 install -D -m 644 "$repo/packaging/gui/lguard.desktop" "$G/usr/share/applications/lguard.desktop"
 install -D -m 644 "$repo/packaging/gui/lguard-autostart.desktop" "$G/etc/xdg/autostart/lguard.desktop"
 install -D -m 644 "$repo/packaging/gui/lguard.svg" "$G/usr/share/icons/hicolor/scalable/apps/lguard.svg"
-install -d "$G/opt/lguard/gui/licenses"
+install -d "$G/opt/lguard/gui/licenses" "$G/opt/lguard/gui/fonts"
 install -m 644 "$repo"/packaging/licenses/* "$G/opt/lguard/gui/licenses/"
+# Inter and Cascadia Mono, unmodified, with their licences (SIL OFL 1.1)
+install -m 644 "$repo"/packaging/gui/fonts/*.woff2 "$G/opt/lguard/gui/fonts/"
+install -m 644 "$repo"/packaging/gui/fonts/*-OFL.txt "$G/opt/lguard/gui/licenses/"
 
 # licences of everything bundled + where the sources are
 cat > "$C/opt/lguard/licenses/BUNDLED.txt" <<EOF

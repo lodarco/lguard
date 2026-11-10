@@ -165,7 +165,7 @@ class ScanBanner(Card):
         self.detail = label("", "Dim")
         self.lay.addWidget(self.detail)
         self.now = label("", "Dim")
-        self.now.setStyleSheet("font-family: monospace; font-size: 12px;")
+        self.now.setStyleSheet(theme.MONO_CSS + " font-size: 12px;")
         self.lay.addWidget(self.now)
         self.first = label(_("first_scan_note"), "Dim", wrap=True)
         self.lay.addWidget(self.first)
@@ -412,7 +412,7 @@ class FindingsPage(Page):
             t.addWidget(label(note.rsplit("/", 1)[-1].split(" (uid")[0] or r["digest"][:16], bold=True, size=16))
             t.addWidget(label(_("Was flagged as: {s}", s=r.get("signature") or "?"), wrap=True))
             p = label(f"SHA-256 {r['digest']}", "Dim", wrap=True)
-            p.setStyleSheet("font-family: monospace; font-size: 12px;")
+            p.setStyleSheet(theme.MONO_CSS + " font-size: 12px;")
             t.addWidget(p)
             t.addWidget(label(when(r.get("ts")), "Dim"))
             h.addLayout(t, 1)
@@ -448,7 +448,7 @@ class FindingsPage(Page):
             t.addLayout(name_row)
             t.addWidget(label(explain(sig), wrap=True))
             p = label(r["path"], "Dim", wrap=True)
-            p.setStyleSheet("font-family: monospace; font-size: 12px;")
+            p.setStyleSheet(theme.MONO_CSS + " font-size: 12px;")
             t.addWidget(p)
             proc = procs.get(r.get("id")) or r.get("process")
             meta = when(r.get("quarantined_at") or r.get("ts"))
@@ -553,7 +553,7 @@ class CategoryPage(Page):
         self.tiles[0][0].setText(_("Download folder") if self.name == "downloads" else _("Folder"))
         self.tiles[0][1].setText(self.tiles[0][1].fontMetrics().elidedText(paths[0], Qt.ElideLeft, 260)
                                  if paths else "–")
-        self.tiles[0][1].setStyleSheet("font-size: 15px; font-family: monospace;")
+        self.tiles[0][1].setStyleSheet("font-size: 15px; " + theme.MONO_CSS)
         self.tiles[0][2].setText(", ".join(paths[1:]) if len(paths) > 1 else
                                  (_("checked as soon as a download finishes") if self.name == "downloads"
                                   else _("libraries checked every week")) if paths
@@ -862,7 +862,7 @@ class FoldersPage(Page):
             kind = "folder" if os.path.isdir(p) or not os.path.exists(p) else "file"
             r.addWidget(IconLabel("folder" if kind == "folder" else "shield", "dim", 16))
             lb = label(p)
-            lb.setStyleSheet("font-family: monospace;")
+            lb.setStyleSheet(theme.MONO_CSS)
             r.addWidget(lb, 1)
             x = QPushButton("✕")
             x.setToolTip(_("Remove"))
@@ -876,7 +876,7 @@ class FoldersPage(Page):
             r = QHBoxLayout()
             r.addWidget(label(_("Detected:"), "Dim"))
             lb = label(p, "Dim")
-            lb.setStyleSheet("font-family: monospace;")
+            lb.setStyleSheet(theme.MONO_CSS)
             r.addWidget(lb, 1)
             a = QPushButton(_("Add"))
             a.clicked.connect(lambda _c=False, path=p: self.add(key, path))
