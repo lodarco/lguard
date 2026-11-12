@@ -325,22 +325,61 @@ class Index:
     def finding_action(self, quarantine_id: str, action: str):
         self.ledger("finding_update", {"quarantine_id": quarantine_id, "action": action})
 
+    def finding_decided(self, path: str, digest: str | None, action: str, quarantine_id: str | None = None):
+        """What became of a finding that was left in place (action "held")."""
+        self.ledger("finding_update", {"path": path, "digest": digest, "action": action,
+                                       "quarantine_id": quarantine_id})
+
     def findings(self, limit: int = 200):
         entries = self.ledger_entries(kinds={"finding", "finding_update"})
-        updates = {}
-        for e in reversed(entries):              # oldest first
-            if e["kind"] == "finding_update":
-                updates[e["quarantine_id"]] = e["action"]
-        out = []
+        entries.reverse()                        # oldest first
+        found = []
         for e in entries:
-            if e["kind"] != "finding":
+            if e["kind"] == "finding":
+                found.append(e)
                 continue
-            if e.get("quarantine_id") in updates:
-                e["action"] = updates[e["quarantine_id"]]
-            out.append(e)
-            if len(out) >= limit:
-                break
-        return out
+            qid, path = e.get("quarantine_id"), e.get("path")
+            for f in found:
+                if path is not None:             # a decision on a file left in place
+                    if (f["path"] == path and f.get("digest") == e.get("digest")
+                            and f.get("action") == "held"):
+                        f["action"] = e["action"]
+                        f["quarantine_id"] = qid
+                elif qid and f.get("quarantine_id") == qid:
+                    f["action"] = e["action"]
+        found.reverse()
+        return found[:limit]
+
+    # --- findings left in place, waiting for the user --------------------
+    def held(self) -> dict:
+        """{path: {"digest", "signature", "ts"}}"""
+        return self.meta_get("held") or {}
+
+    def hold(self, path: str, digest: str | None, signature: str | None):
+        h = self.held()
+        h[path] = {"digest": digest, "signature": signature, "ts": time.time()}
+        self.meta_set("held", h)
+
+    def unhold(self, path: str):
+        h = self.held()
+        if h.pop(path, None) is not None:
+            self.meta_set("held", h)
+
+    # --- content the user removed as a threat ----------------------------
+    def is_condemned(self, digest: str | None) -> bool:
+        return bool(digest) and digest in (self.meta_get("condemned") or [])
+
+    def condemn(self, digest: str | None):
+        """Every later copy of this content goes to quarantine at once."""
+        if not digest:
+            return
+        c = [d for d in (self.meta_get("condemned") or []) if d != digest]
+        self.meta_set("condemned", (c + [digest])[-5000:])
+
+    def pardon(self, digest: str | None):
+        c = self.meta_get("condemned") or []
+        if digest in c:
+            self.meta_set("condemned", [d for d in c if d != digest])
 
     def event(self, kind: str, detail: str = ""):
         self.ledger("event", {"event": kind, "detail": detail})

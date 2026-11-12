@@ -5,7 +5,8 @@ Two listeners:
 Fanotify   marks whole filesystems for FAN_CLOSE_WRITE: the kernel reports
            every file that was open for writing and has just been closed, on
            the entire filesystem, without per-directory watches (inotify
-           would need millions).
+           would need millions). Where the kernel can (5.0+), it also reports
+           programs being started (FAN_OPEN_EXEC).
 DirEvents  (Linux 5.9+) reports names that appear by rename and names that
            disappear: a download moved into place when it finishes gives no
            close-write event, and ransomware deletes the originals. On older
@@ -30,6 +31,7 @@ FAN_MARK_MOUNT = 0x10
 FAN_MARK_FILESYSTEM = 0x100
 
 FAN_CLOSE_WRITE = 0x08
+FAN_OPEN_EXEC = 0x1000                      # Linux 5.0+
 FAN_MOVED_FROM = 0x40
 FAN_MOVED_TO = 0x80
 FAN_DELETE = 0x200
@@ -58,22 +60,27 @@ class Fanotify:
             e = ctypes.get_errno()
             raise OSError(e, f"fanotify_init: {os.strerror(e)}")
         self.fd = fd
+        self.exec_events = True         # until a kernel refuses FAN_OPEN_EXEC
 
     def mark(self, path: str) -> str:
         """Watch the filesystem containing `path` (falls back to the mount
         for filesystems that refuse filesystem marks, e.g. FUSE)."""
-        for how, flag in (("filesystem", FAN_MARK_FILESYSTEM), ("mount", FAN_MARK_MOUNT)):
-            r = _libc.fanotify_mark(self.fd, FAN_MARK_ADD | flag, FAN_CLOSE_WRITE, AT_FDCWD, path.encode())
-            if r == 0:
-                return how
-            e = ctypes.get_errno()
-            if e not in (errno.EINVAL, errno.EXDEV, errno.ENODEV, errno.EOPNOTSUPP):
-                raise OSError(e, f"fanotify_mark {path}: {os.strerror(e)}")
+        for mask in ([FAN_CLOSE_WRITE | FAN_OPEN_EXEC] if self.exec_events else []) + [FAN_CLOSE_WRITE]:
+            for how, flag in (("filesystem", FAN_MARK_FILESYSTEM), ("mount", FAN_MARK_MOUNT)):
+                r = _libc.fanotify_mark(self.fd, FAN_MARK_ADD | flag, mask, AT_FDCWD, path.encode())
+                if r == 0:
+                    return how
+                e = ctypes.get_errno()
+                if e not in (errno.EINVAL, errno.EXDEV, errno.ENODEV, errno.EOPNOTSUPP):
+                    raise OSError(e, f"fanotify_mark {path}: {os.strerror(e)}")
+            if mask & FAN_OPEN_EXEC:
+                self.exec_events = False
         raise OSError(errno.EOPNOTSUPP, f"fanotify cannot watch {path}")
 
     def read(self):
-        """Yield (path | None, pid, overflow, first bytes) for each event;
-        closes event fds."""
+        """Yield (path | None, pid, overflow, first bytes, what) for each
+        event, what = "write", "start" (a program being run) or both joined
+        by "+"; closes event fds."""
         buf = os.read(self.fd, 256 * 1024)
         off = 0
         while off + _META.size <= len(buf):
@@ -82,20 +89,22 @@ class Fanotify:
                 break
             off += event_len
             if mask & FAN_Q_OVERFLOW:
-                yield None, 0, True, b""
+                yield None, 0, True, b"", ""
                 continue
             if fd < 0:
                 continue
+            what = "+".join(w for w, bit in (("write", FAN_CLOSE_WRITE), ("start", FAN_OPEN_EXEC)) if mask & bit)
             magic = b""
             try:
                 path = os.readlink(f"/proc/self/fd/{fd}")
-                magic = os.pread(fd, 8, 0)      # costs nothing: the file is already open
+                if mask & FAN_CLOSE_WRITE:
+                    magic = os.pread(fd, 8, 0)  # costs nothing: the file is already open
             except OSError:
                 path = None
             finally:
                 os.close(fd)
             if path and not path.endswith(" (deleted)"):
-                yield path, pid, False, magic
+                yield path, pid, False, magic, what
 
     def close(self):
         os.close(self.fd)

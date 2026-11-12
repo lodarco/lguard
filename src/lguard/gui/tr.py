@@ -171,6 +171,16 @@ DE = {
     "Scan engine": "Scan-Engine",
     "Interface": "Oberfläche",
     "about_licence": "Lguard ist freie Software unter der GNU General Public License v3.0. Qt und PySide6 stehen unter der LGPLv3 und dürfen durch eigene Builds ersetzt werden; die Schriften Inter und Cascadia Mono unter der SIL Open Font License. Lizenzen: /opt/lguard/licenses und /opt/lguard/gui/licenses.",
+    "Waiting for you": "Wartet auf Sie",
+    "{n} files are waiting for your decision": "{n} Dateien warten auf Ihre Entscheidung",
+    "Nothing is waiting": "Nichts wartet auf eine Entscheidung",
+    "held_explain": "Bei einer Hintergrundprüfung in einer Datei gefunden, die sich lange nicht geändert hat. Solche Treffer sind oft Fehlalarme, daher blieb die Datei an ihrem Platz. Vertrauen Sie ihr oder entfernen Sie sie – die Entscheidung gilt für jede Kopie desselben Inhalts.",
+    "Publisher signature intact – this is often a false alarm.": "Herausgebersignatur intakt – das ist oft ein Fehlalarm.",
+    "{n} copies of the same content": "{n} Kopien desselben Inhalts",
+    "Trust": "Vertrauen", "Move to quarantine": "In Quarantäne verschieben",
+    "Copies of the same content are deleted as well.": "Kopien desselben Inhalts werden ebenfalls gelöscht.",
+    "Left in place": "An Ort und Stelle belassen", "Deleted": "Gelöscht", "Restored": "Wiederhergestellt",
+    "No longer there": "Nicht mehr vorhanden",
 }
 ES = {
     "Overview": "Resumen", "Findings & quarantine": "Hallazgos y cuarentena", "Media": "Multimedia",
@@ -336,6 +346,16 @@ ES = {
     "Scan engine": "Motor de análisis",
     "Interface": "Interfaz",
     "about_licence": "Lguard es software libre bajo la GNU General Public License v3.0. Qt y PySide6 están bajo la LGPLv3 y puedes sustituirlos por tus propias compilaciones; las fuentes Inter y Cascadia Mono, bajo la SIL Open Font License. Licencias: /opt/lguard/licenses y /opt/lguard/gui/licenses.",
+    "Waiting for you": "Esperando su decisión",
+    "{n} files are waiting for your decision": "{n} archivos esperan su decisión",
+    "Nothing is waiting": "Nada espera una decisión",
+    "held_explain": "Encontrado por una comprobación en segundo plano en un archivo que no ha cambiado en mucho tiempo. Estos avisos suelen ser falsas alarmas, por eso el archivo se dejó en su sitio. Confíe en él o elimínelo: la decisión vale para todas las copias del mismo contenido.",
+    "Publisher signature intact – this is often a false alarm.": "Firma del editor intacta: a menudo es una falsa alarma.",
+    "{n} copies of the same content": "{n} copias del mismo contenido",
+    "Trust": "Confiar", "Move to quarantine": "Mover a cuarentena",
+    "Copies of the same content are deleted as well.": "Las copias del mismo contenido también se eliminan.",
+    "Left in place": "Dejado en su sitio", "Deleted": "Eliminado", "Restored": "Restaurado",
+    "No longer there": "Ya no existe",
 }
 EN = {
     "about_licence": "Lguard is free software under the GNU General Public License v3.0. Qt and PySide6 are under the LGPLv3 and may be replaced with your own builds; the Inter and Cascadia Mono fonts are under the SIL Open Font License. Licences: /opt/lguard/licenses and /opt/lguard/gui/licenses.",
@@ -346,6 +366,7 @@ EN = {
     'integrity_explain': 'Lguard keeps a sealed, encrypted record of every file it checked. If that record is edited, or a file is swapped behind its back, the file is checked again and you are told.',
     'scan_explain': 'Files you already have are checked automatically; use this for a USB stick or anything you are unsure about.',
     "quarantine_note": "Quarantined files cannot run and only an administrator can reach them. Every action is written to Lguard's sealed history; restoring asks for your password.",
+    "held_explain": "Found by a background check in a file that has not changed for a long time. Such hits are often false alarms, so the file was left where it is. Trust it or remove it – the decision applies to every copy of the same content.",
 }
 _TABLES = {"de": DE, "es": ES, "en": EN}
 

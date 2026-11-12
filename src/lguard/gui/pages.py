@@ -345,7 +345,8 @@ class FindingsPage(Page):
         th.setContentsMargins(3, 3, 3, 3)
         th.setSpacing(2)
         self.tab_buttons = {}
-        for key, text in (("quarantine", "In quarantine"), ("all", "All findings"), ("trusted", "Trusted")):
+        for key, text in (("quarantine", "In quarantine"), ("held", "Waiting for you"),
+                          ("all", "All findings"), ("trusted", "Trusted")):
             b = QPushButton(_(text).replace("&", "&&"))
             b.setObjectName("Tab")
             b.setCheckable(True)
@@ -379,6 +380,8 @@ class FindingsPage(Page):
             self.client.request("fi.quarantine", "quarantine")
         elif self.mode == "trusted":
             self.client.request("fi.trusted", "trusted")
+        elif self.mode == "held":
+            self.client.request("fi.held", "held")
 
     def on_result(self, tag, d):
         if tag == "fi.findings":
@@ -389,6 +392,8 @@ class FindingsPage(Page):
             self.render(d, quarantine=True)
         elif tag == "fi.trusted" and self.mode == "trusted":
             self.render_trusted(d)
+        elif tag == "fi.held" and self.mode == "held":
+            self.render_held(d)
         elif tag.startswith("fi.action"):
             self.refresh()
 
@@ -416,6 +421,63 @@ class FindingsPage(Page):
             h.addWidget(b)
             card.lay.addLayout(h)
             self.list.addWidget(card)
+
+    def render_held(self, rows):
+        """Detections in old files that were left in place: the user decides,
+        once for every copy of the same content."""
+        clear(self.list)
+        self.heading.setText(_("{n} files are waiting for your decision", n=len(rows)) if rows
+                             else _("Nothing is waiting"))
+        if rows:
+            self.list.addWidget(label(_("held_explain"), "Dim", wrap=True))
+        for r in rows:
+            sig = r.get("signature") or ""
+            card = Card(padding=18, spacing=4)
+            h = QHBoxLayout()
+            h.setSpacing(14)
+            h.addWidget(IconLabel("warning", "warning", 32, 1.8), 0, Qt.AlignTop)
+            t = QVBoxLayout()
+            t.setSpacing(4)
+            t.addWidget(label(r["path"].rsplit("/", 1)[-1], bold=True, size=16))
+            t.addWidget(label(explain(sig), wrap=True))
+            detail = r.get("detail") or ""
+            if "unchanged since signing" in detail:
+                who = detail.split('"')[1] if detail.count('"') >= 2 else ""
+                t.addWidget(label(_("Publisher signature intact – this is often a false alarm.")
+                                  + (f" ({who})" if who else ""), wrap=True))
+            p = label(r["path"], "Dim", wrap=True)
+            p.setStyleSheet(theme.MONO_CSS + " font-size: 12px;")
+            t.addWidget(p)
+            meta = when(r.get("ts"))
+            if r.get("size") is not None:
+                meta += " · " + human_bytes(r["size"])
+            if (r.get("copies") or 1) > 1:
+                meta += " · " + _("{n} copies of the same content", n=r["copies"])
+            t.addWidget(label(meta, "Dim"))
+            h.addLayout(t, 1)
+            btns = QHBoxLayout()
+            b1 = QPushButton(_("Trust"))
+            b2 = QPushButton(_("Move to quarantine"))
+            b3 = QPushButton(_("Delete"))
+            b3.setObjectName("Destructive")
+            dg = r.get("digest")
+            b1.clicked.connect(lambda _c=False, d=dg: self.client.request("fi.action", "decide", 600, digest=d, action="trust"))
+            b2.clicked.connect(lambda _c=False, d=dg: self.client.request("fi.action", "decide", 600, digest=d, action="quarantine"))
+            b3.clicked.connect(lambda _c=False, d=dg, n=r["path"]: self.confirm_delete_held(d, n))
+            for b in (b1, b2, b3):
+                btns.addWidget(b)
+            h.addLayout(btns)
+            card.lay.addLayout(h)
+            self.list.addWidget(card)
+
+    def confirm_delete_held(self, digest, path):
+        text = f"{path}\n\n" + _("Delete this file forever?") + "\n" + _("Copies of the same content are deleted as well.")
+        if QMessageBox.question(self, _("Delete"), text) == QMessageBox.Yes:
+            self.client.request("fi.action", "decide", 600, digest=digest, action="delete")
+
+    ACTIONS = {"held": "Left in place", "quarantined": "Quarantined", "deleted": "Deleted", "restored": "Restored",
+               "restored+trusted": "Trusted", "restored+allowed": "Trusted", "trusted": "Trusted",
+               "reported": "Reported", "gone": "No longer there"}
 
     def render(self, rows, quarantine: bool):
         clear(self.list)
@@ -451,6 +513,8 @@ class FindingsPage(Page):
                 meta += " · " + proc.rsplit("/", 1)[-1]
             if r.get("size") is not None:
                 meta += " · " + human_bytes(r["size"])
+            if not quarantine and r.get("action") in self.ACTIONS:
+                meta += " · " + _(self.ACTIONS[r["action"]])
             t.addWidget(label(meta, "Dim"))
             h.addLayout(t, 1)
             if quarantine:
@@ -476,7 +540,8 @@ class FindingsPage(Page):
         return ""
 
     def confirm_delete(self, qid, path):
-        if QMessageBox.question(self, _("Delete"), f"{path}\n\n" + _("Delete this file forever?")) == QMessageBox.Yes:
+        text = f"{path}\n\n" + _("Delete this file forever?") + "\n" + _("Copies of the same content are deleted as well.")
+        if QMessageBox.question(self, _("Delete"), text) == QMessageBox.Yes:
             self.client.request("fi.action", "delete", 600, qid=qid)
 
 

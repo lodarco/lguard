@@ -20,10 +20,51 @@ class Policy(unittest.TestCase):
 
     def test_what_needs_the_administrator(self):
         need = self.api.need
-        for m in ("status", "findings", "start_sweep", "resume_sweep", "scan", "trusted"):
+        for m in ("status", "findings", "start_sweep", "resume_sweep", "scan", "trusted", "held"):
             self.assertEqual(need(m, {}), api_mod.VIEW, m)
-        for m in ("restore", "delete", "unfreeze", "set_folders", "untrust", "resume_process", "no_such"):
+        for m in ("restore", "delete", "decide", "unfreeze", "set_folders", "untrust", "resume_process", "no_such"):
             self.assertEqual(need(m, {}), api_mod.MANAGE, m)
+
+    def test_one_decision_reaches_every_copy(self):
+        from lguard import quarantine
+        from lguard.scanner import Scanner
+        sc = Scanner(self.cfg, self.idx, util.FakeClamd(), log=lambda m: None)
+        home = os.path.join(self.top, "home")
+        new = util.write(os.path.join(home, "new.bin"), util.THREAT)
+        sc.scan(new)                                            # quarantined
+        sc._unchanged_days = lambda st: 400
+        old = [util.write(os.path.join(home, d, "old.bin"), util.THREAT) for d in ("a", "b")]
+        for p in old:
+            sc.scan(p)                                          # left in place
+        self.idx.commit()
+        held = self.api.m_held(self.idx, 1000)
+        self.assertEqual(sorted(h["path"] for h in held), old)
+        self.assertEqual({h["copies"] for h in held}, {3})
+        self.assertEqual(self.api.m_status(self.idx, 1000)["held"], 2)
+        with self.assertRaises(ValueError):
+            self.api.m_decide(self.idx, 1000, "0" * 64, "trust")
+        with self.assertRaises(ValueError):
+            self.api.m_decide(self.idx, 1000, held[0]["digest"], "explode")
+        self.api.m_decide(self.idx, 1000, held[0]["digest"], "trust")
+        self.assertTrue(all(os.path.exists(p) for p in old + [new]))
+        self.assertEqual(quarantine.entries(self.cfg), [])
+        self.assertEqual(self.api.m_held(self.idx, 1000), [])
+
+    def test_deleting_one_quarantined_copy_deletes_the_others(self):
+        from lguard import quarantine
+        from lguard.scanner import Scanner
+        sc = Scanner(self.cfg, self.idx, util.FakeClamd(), log=lambda m: None)
+        home = os.path.join(self.top, "home")
+        for d in ("a", "b"):
+            sc.scan(util.write(os.path.join(home, d, "x.bin"), util.THREAT))
+        sc._unchanged_days = lambda st: 400
+        kept = util.write(os.path.join(home, "c", "x.bin"), util.THREAT)
+        sc.scan(kept)
+        self.idx.commit()
+        qid = quarantine.entries(self.cfg)[0]["id"]
+        self.assertEqual(self.api.m_delete(self.idx, 1000, qid)["copies"], 3)
+        self.assertEqual(quarantine.entries(self.cfg), [])
+        self.assertFalse(os.path.exists(kept))
 
     def test_only_a_short_pause_is_free(self):
         need = self.api.need

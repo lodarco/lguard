@@ -101,6 +101,13 @@ class Config:
     verify_cycle_days: int = 30
 
     quarantine: bool = True
+    # A detection in a file that has not changed for this many days, met by
+    # a background check, is reported and left where it is until the user
+    # decides (such hits are mostly false alarms, and moving the file breaks
+    # whatever uses it). New and changed files, files in the category
+    # folders, a program that is being started and content the user already
+    # removed once are still quarantined at once. 0 = always quarantine.
+    hold_old_days: int = 30
     quarantine_dir: str = os.path.join(STATE_DIR, "quarantine")
     # path-prefix -> command run after a file under it was quarantined
     # ("{path}" is replaced). E.g. Nextcloud files:scan.

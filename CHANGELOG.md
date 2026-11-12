@@ -1,5 +1,31 @@
 # Changes
 
+## 0.2.1
+
+False alarms
+- A detection in a file that has not changed for 30 days (`hold_old_days`),
+  met by the nightly check or the full disk scan, is reported and left where
+  it is until you decide. Before, it was moved to quarantine at once: one
+  wrong signature could break a working program, and where a folder is
+  synced the removal travelled on to the other copies. New and changed
+  files, everything in the category folders and content you already removed
+  once are quarantined at once, as before.
+- A file left in place is quarantined the moment it is started as a program
+  (Linux 5.0+).
+- Windows programs: Lguard reads the publisher signature of a detected file.
+  If the content is still exactly what was signed, the finding says so
+  (often a false alarm). If it was changed after signing, the file is
+  quarantined however old it is. The signature is evidence, not a pass: the
+  certificate chain is not verified, so a signed new file is still
+  quarantined.
+- One decision for every copy: "Trust" restores all quarantined copies of
+  the same content and keeps the ones left in place; "Delete" removes all of
+  them, and later copies of that content are quarantined without asking.
+  One alert per content instead of one per copy.
+- App: new tab "Waiting for you" under Findings; "All findings" shows what
+  became of each. Command line: `lguard held list | trust | quarantine |
+  delete <sha256>`.
+
 ## 0.2.0
 
 Security

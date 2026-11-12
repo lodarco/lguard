@@ -7,7 +7,7 @@ import stat
 import time
 from dataclasses import dataclass
 
-from . import filetype, quarantine
+from . import authenticode, filetype, quarantine
 from .clamd import Clamd, ClamdError
 from .config import Config
 from .i18n import t
@@ -23,7 +23,7 @@ class Result:
     verdict: str            # clean | infected | suspicious | warning | error | skipped
     signature: str | None = None
     cached: bool = False
-    action: str | None = None   # quarantined | reported | None
+    action: str | None = None   # quarantined | held | reported | None
     detail: str | None = None
 
 
@@ -80,8 +80,13 @@ class Scanner:
     def invalidate_db_version(self):
         self._dbver_at = 0.0
 
-    def scan(self, path: str, force: bool = False, process: str | None = None) -> Result:
+    def scan(self, path: str, force: bool = False, process: str | None = None,
+             fresh: bool = False, started: bool = False) -> Result:
+        """fresh = the file was written or moved into place just now (a
+        real-time event); started = it is being run as a program. Either
+        way a detection is quarantined at once, however old the file is."""
         cfg = self.cfg
+        event = "started" if started else "fresh" if fresh else ""
         if cfg.is_excluded(path):
             return Result(path, "skipped", detail="excluded")
         soft = cfg.is_soft_excluded(path)
@@ -106,7 +111,9 @@ class Scanner:
             born = row.first_seen or row.scanned_at or 0
             recent = time.time() - born < cfg.sweep_retro_days * 86400
             stale = row.risky and row.db_version < dbver and (recent or cfg.is_priority(path))
-            if row.verdict in BAD or (row.verdict in ("clean", "warning", "partial") and not stale):
+            if started and row.verdict in BAD:
+                pass                                 # left in place earlier; not any more
+            elif row.verdict in BAD or (row.verdict in ("clean", "warning", "partial") and not stale):
                 self.index.bump(cached=1)
                 return Result(path, row.verdict, row.signature, cached=True)
 
@@ -122,11 +129,12 @@ class Scanner:
                 return Result(path, "skipped", detail="changed while opening")
             if soft and not filetype.is_program(os.pread(fd, 8, 0)):
                 return Result(path, "skipped", detail="cache or log data")
-            return self._scan_open(path, fd, fst, dbver, process, row=row)
+            return self._scan_open(path, fd, fst, dbver, process, row=row, event=event)
         finally:
             os.close(fd)
 
-    def _scan_open(self, path, fd, st, dbver, process, row=None, digest=None, current_only=False) -> Result:
+    def _scan_open(self, path, fd, st, dbver, process, row=None, digest=None, current_only=False,
+                   event="") -> Result:
         """Scan the open file. `digest` is passed when the caller has just
         hashed it; current_only = accept a remembered verdict for this
         content only if it was made with the current signatures (full disk
@@ -191,7 +199,7 @@ class Scanner:
         if verdict in BAD or verdict == "warning":
             known = row is not None and row.verdict == verdict and row.signature == signature
             if not (known and verdict == "warning"):      # a standing warning is reported once
-                self._act(res, fd, st, digest, process)
+                self._act(res, fd, st, digest, process, event)
         if res.action != "quarantined":
             now = time.time()
             born = (row.first_seen or row.scanned_at) if row is not None else now
@@ -202,16 +210,56 @@ class Scanner:
             self.index.forget(path)
         return res
 
-    def _act(self, res: Result, fd, st, digest, process):
+    @staticmethod
+    def _unchanged_days(st) -> int:
+        """Whole days since content or attributes last changed (the later
+        of the two: a file's own date can be set to anything)."""
+        return int((time.time() - max(st.st_mtime, st.st_ctime)) // 86400)
+
+    def _hold_days(self, res: Result, st, digest, event: str, sig, held: dict) -> int:
+        """Days the detected file has been unchanged, when that is long
+        enough to leave it where it is and ask; else 0 (quarantine now)."""
+        cfg = self.cfg
+        if not cfg.hold_old_days or event == "started" or cfg.is_priority(res.path):
+            return 0
+        if (res.signature or "").startswith("Lguard.") or self.index.is_condemned(digest):
+            return 0
+        if sig is not None and not sig.intact:       # altered after it was signed
+            return 0
+        days = self._unchanged_days(st)
+        if any(h.get("digest") == digest for h in held.values()):
+            return max(days, 1)                      # a copy of what is already waiting for a decision
+        return days if days >= cfg.hold_old_days and not event else 0
+
+    def _act(self, res: Result, fd, st, digest, process, event: str = ""):
         cfg = self.cfg
         sig = res.signature or "?"
         level = res.verdict
-        if res.verdict in BAD and cfg.may_quarantine(res.path):
+        signed = authenticode.check(fd, st.st_size) if res.verdict in BAD else None
+        note = ""
+        if signed is not None:
+            res.detail = signed.describe()
+            note = "\n" + (t("signed_ok", who=f" ({signed.signer})" if signed.signer else "")
+                           if signed.intact else t("signed_broken"))
+        held = self.index.held() if res.verdict in BAD else {}
+        held_days = self._hold_days(res, st, digest, event, signed, held) if (
+            res.verdict in BAD and cfg.may_quarantine(res.path)) else 0
+        if held_days:
+            res.action = "held"
+            if (held.get(res.path) or {}).get("digest") != digest:
+                known = any(h.get("digest") == digest for h in held.values())
+                self.index.hold(res.path, digest, sig)
+                self.index.add_finding(res.path, digest, level, sig, "held", None, process, res.detail)
+                if not known:                        # one alert per content, not one per copy
+                    notify(cfg, t("held_title"), t("held", sig=sig, path=res.path, days=held_days) + note,
+                           "high", covered=bool(self.on_finding))
+        elif res.verdict in BAD and cfg.may_quarantine(res.path):
             try:
                 qid = quarantine.quarantine(cfg, res.path, fd, st, digest, sig, self.log)
                 res.action = "quarantined"
-                self.index.add_finding(res.path, digest, level, sig, "quarantined", qid, process)
-                notify(cfg, t(f"{level}_title"), t("quarantined", sig=sig, path=res.path), "high",
+                self.index.unhold(res.path)
+                self.index.add_finding(res.path, digest, level, sig, "quarantined", qid, process, res.detail)
+                notify(cfg, t(f"{level}_title"), t("quarantined", sig=sig, path=res.path) + note, "high",
                        covered=bool(self.on_finding))
             except Exception as e:
                 res.action = "reported"
@@ -222,9 +270,9 @@ class Scanner:
             if res.verdict in BAD:
                 level = "critical"
             res.action = "reported"
-            self.index.add_finding(res.path, digest, level, sig, "reported", None, process)
+            self.index.add_finding(res.path, digest, level, sig, "reported", None, process, res.detail)
             prio = {"critical": "urgent", "warning": "default"}.get(level, "high")
-            notify(cfg, t(f"{level}_title"), t("reported", sig=sig, path=res.path), prio,
+            notify(cfg, t(f"{level}_title"), t("reported", sig=sig, path=res.path) + note, prio,
                    covered=bool(self.on_finding))
         self.index.commit()
         if self.on_finding:

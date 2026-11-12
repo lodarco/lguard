@@ -7,7 +7,7 @@ import os
 import sys
 
 from . import config as config_mod
-from . import quarantine, vault
+from . import decide, quarantine, vault
 from .clamd import Clamd
 from .freeze import freeze, unfreeze
 from .i18n import set_language
@@ -150,6 +150,8 @@ def _status_via_service():
     for p in d.get("stopped") or []:
         print(f"stopped:       pid {p['pid']} {p['proc']}  (sudo lguard resume-process)")
     print(f"quarantine:    {d.get('quarantine', 0)} files")
+    if d.get("held"):
+        print(f"waiting:       {d['held']} old files with a detection, left in place (lguard held list)")
     return 0
 
 
@@ -238,14 +240,50 @@ def cmd_quarantine(cfg, args):
         sys.exit(f"no quarantine entry {args.id}")
     if args.action == "restore":
         if args.allow and meta.get("digest"):
-            idx.allow(meta["digest"], meta.get("signature"), f"restored {meta['path']}")
-        target = quarantine.restore(cfg, args.id)
-        idx.finding_action(args.id, "restored+allowed" if args.allow else "restored")
-        print(f"restored to {target}" + (" and allowed" if args.allow else ""))
+            done = decide.trust(cfg, idx, meta["digest"], meta.get("signature"), f"restored {meta['path']}")
+            for target in done["restored"]:
+                print(f"restored to {target} and allowed")
+            for path in done["kept"]:
+                print(f"allowed where it is: {path}")
+        else:
+            target = quarantine.restore(cfg, args.id)
+            idx.finding_action(args.id, "restored")
+            print(f"restored to {target}")
+    elif meta.get("digest"):
+        n = decide.remove(cfg, idx, meta["digest"])["deleted"]
+        print("deleted" + (f" ({n} copies of the same content)" if n > 1 else ""))
     else:
         quarantine.delete(cfg, args.id)
         idx.finding_action(args.id, "deleted")
         print("deleted")
+    idx.close()
+
+
+def cmd_held(cfg, args):
+    """Detections in old files that were left in place."""
+    _need_root()
+    idx = open_index()
+    items = decide.held_items(idx)
+    if args.action == "list":
+        for h in items:
+            print(f"{_ts(h['ts'])}  {(h.get('digest') or '')[:16]}  {h.get('signature') or '?':38} {h['path']}")
+        if not items:
+            print("nothing is waiting for a decision")
+        idx.close()
+        return 0
+    if not args.digest:
+        sys.exit(f"held {args.action} needs the first characters of the SHA-256 (see: lguard held list)")
+    match = sorted({h["digest"] for h in items if (h.get("digest") or "").startswith(args.digest)})
+    if len(match) != 1:
+        sys.exit("no held file with that SHA-256" if not match else "that matches more than one content")
+    sig = next(h.get("signature") for h in items if h["digest"] == match[0])
+    if args.action == "trust":
+        done = decide.trust(cfg, idx, match[0], sig, "lguard held trust")
+        print(f"trusted: {len(done['kept'])} left in place, {len(done['restored'])} restored from quarantine")
+    elif args.action == "quarantine":
+        print(f"moved to quarantine: {len(decide.isolate(cfg, idx, match[0]))}")
+    else:
+        print(f"deleted: {decide.remove(cfg, idx, match[0])['deleted']}")
     idx.close()
 
 
@@ -321,6 +359,11 @@ def main(argv=None):
     p.add_argument("id", nargs="?")
     p.add_argument("--allow", action="store_true", help="with restore: never flag this content again")
     p.set_defaults(fn=cmd_quarantine)
+
+    p = sub.add_parser("held", help="detections in old files left in place: list, trust, quarantine or delete")
+    p.add_argument("action", choices=["list", "trust", "quarantine", "delete"])
+    p.add_argument("digest", nargs="?", help="SHA-256 (or its first characters) from: lguard held list")
+    p.set_defaults(fn=cmd_held)
 
     sub.add_parser("resume-process", help="let a program stopped by the ransomware shield continue"
                    ).set_defaults(fn=cmd_resume_process)

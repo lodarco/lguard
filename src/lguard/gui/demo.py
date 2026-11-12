@@ -20,6 +20,13 @@ class Demo:
              "digest": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"},
         ]
 
+        self.held = [
+            {"path": "/mnt/backup/old-pc/Program Files/Archiver/Uninstall.exe", "signature": "Win.Virus.Example-1",
+             "digest": "5c1f0c6f3a1b0a57a0e6f0d3b1f9a5c2e4d7b8a9c0d1e2f3a4b5c6d7e8f90a1b", "ts": NOW - 5 * 3600,
+             "size": 408624, "copies": 3,
+             "detail": 'signed by "Example Software Ltd", unchanged since signing (publisher not verified)'},
+        ]
+
     def call(self, method, **p):
         return getattr(self, "m_" + method)(**p)
 
@@ -27,7 +34,7 @@ class Demo:
         return {"engine": "ClamAV 1.5.4", "signatures": 28179, "engine_ok": True, "realtime": True,
                 "watched": ["/", "/home", "/srv", "/mnt/backup", "/dev/shm"],
                 "files": 1842317, "counts": {"files": 1842317, "bytes": 1.52e12, "clean": 1842315},
-                "last_sweep": NOW - 14 * 3600, "frozen": self.frozen, "quarantine": len(self.quarantine),
+                "last_sweep": NOW - 14 * 3600, "frozen": self.frozen, "quarantine": len(self.quarantine), "held": len(self.held),
                 "key": "sealed (systemd-creds)", "history": {"entries": 4812, "head": "7e1c4f02a90b11d2"},
                 "version": "demo", "scans": {"quick": True, "full": False}, "stopped": [], "rename_events": True,
                 "categories": {"downloads": ["/srv/media/downloads", "/home/alex/Downloads"], "plex": ["/srv/media"],
@@ -116,6 +123,13 @@ class Demo:
     def m_unfreeze(self):
         self.frozen = "no"
         return []
+
+    def m_held(self):
+        return self.held
+
+    def m_decide(self, digest, action):
+        self.held = [h for h in self.held if h["digest"] != digest]
+        return {}
 
     def m_trusted(self):
         return [{"digest": "3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea",

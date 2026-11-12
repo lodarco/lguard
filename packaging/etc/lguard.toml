@@ -7,4 +7,5 @@
 # freeze_commands = []        # what to stop when ransomware is detected
 # ransom_stop_process = "untrusted"   # suspend the program: untrusted | always | never
 # unfreeze_commands = []
+# hold_old_days = 30         # a detection in a file unchanged this long is reported and left for you to decide; 0 = always quarantine
 clamd_socket = "/run/lguard-clamd/clamd.sock"

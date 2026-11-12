@@ -322,7 +322,7 @@ class MainWindow(QMainWindow):
         if tag in ("win.status", "ov.status") and data.get("categories"):
             self.set_categories(list(BUILTIN) + [k for k in data["categories"] if k not in BUILTIN])
         if tag == "win.status" or tag == "ov.status":
-            n = data.get("quarantine", 0)
+            n = data.get("quarantine", 0) + data.get("held", 0)
             self.badge.setText(str(n))
             self.badge.setVisible(bool(n))
             self.foot.setText(f"{_('Signatures')} {data.get('signatures')}\n"
@@ -505,7 +505,8 @@ class LguardApp:
             cat = ev.get("category")
             title = (_("Fake media") if (ev.get("signature") or "").startswith(("Lguard.Media", "Lguard.Torrent"))
                      else _("Virus"))
-            title += " – " + (_("Quarantined") if ev.get("action") == "quarantined" else ev.get("verdict", ""))
+            title += " – " + (_("Quarantined") if ev.get("action") == "quarantined" else
+                              _("Left in place") if ev.get("action") == "held" else ev.get("verdict", ""))
             body = os.path.basename(ev.get("path", "")) + (f"  ({_(cat.capitalize())})" if cat else "")
             self.notifier.send(title, body, 1, [("default", _("Show details"))])
         elif kind == "ransom_alarm":

@@ -30,7 +30,7 @@ import time
 
 from . import __version__
 from . import config as config_mod
-from . import detect, quarantine, vault
+from . import decide, detect, quarantine, vault
 from .clamd import Clamd
 from .config import Config
 from .freeze import freeze, unfreeze
@@ -39,7 +39,7 @@ from .index import Index
 SOCKET_PATH = os.environ.get("LGUARD_API_SOCKET", "/run/lguard/api.sock")
 VIEW = "io.github.lodarco.lguard.view"
 MANAGE = "io.github.lodarco.lguard.manage"
-READ_METHODS = {"status", "findings", "events", "daily", "category", "quarantine", "subscribe", "ping",
+READ_METHODS = {"status", "findings", "events", "daily", "category", "quarantine", "held", "subscribe", "ping",
                 "start_sweep", "resume_sweep", "get_folders", "scan", "trusted"}
 MAX_LINE = 64 * 1024
 MAX_CONNECTIONS = 64
@@ -269,6 +269,7 @@ class Api:
             "last_sweep": idx.meta_get("last_sweep"),
             "frozen": idx.meta_get("frozen", "no"),
             "quarantine": len(quarantine.entries(self.cfg)),
+            "held": len(idx.held()),
             "key": vault.key_storage(),
             "history": {"entries": seq, "head": head.hex()[:16]},
             "categories": {k: v for k, v in self.cfg.categories.items()},
@@ -436,6 +437,43 @@ class Api:
     def m_quarantine(self, idx, uid):
         return quarantine.entries(self.cfg)
 
+    def m_held(self, idx, uid):
+        """Detections in old files that were left in place for the user to
+        decide, with how many copies of the same content are waiting."""
+        items = decide.held_items(idx)
+        waiting = quarantine.entries(self.cfg)
+        details = {(f["path"], f.get("digest")): f.get("detail") for f in idx.findings(1000)}
+        for h in items:
+            h["copies"] = (sum(1 for o in items if o.get("digest") == h.get("digest"))
+                           + sum(1 for e in waiting if e.get("digest") == h.get("digest")))
+            h["detail"] = details.get((h["path"], h.get("digest")))
+            try:
+                h["size"] = os.lstat(h["path"]).st_size
+            except OSError:
+                h["size"] = None
+        return items
+
+    def m_decide(self, idx, uid, digest: str, action: str):
+        """Settle every copy of a held detection: trust, quarantine or delete."""
+        digest = str(digest)
+        w = self._write_index()
+        try:
+            sig = next((h.get("signature") for h in w.held().values() if h.get("digest") == digest), None)
+            if sig is None:
+                raise ValueError("nothing is waiting with this content")
+            if action == "trust":
+                res = decide.trust(self.cfg, w, digest, sig, f"trusted in place (uid {uid})")
+            elif action == "quarantine":
+                res = {"quarantined": decide.isolate(self.cfg, w, digest)}
+            elif action == "delete":
+                res = decide.remove(self.cfg, w, digest)
+            else:
+                raise ValueError("action must be trust, quarantine or delete")
+        finally:
+            w.close()
+        self.publish({"event": "quarantine_changed"})
+        return res
+
     def m_trusted(self, idx, uid):
         """Content the user chose to trust (restore & trust)."""
         return idx.allowlist()
@@ -514,10 +552,13 @@ class Api:
             meta = next((e for e in quarantine.entries(self.cfg) if e["id"] == qid), None)
             if not meta:
                 raise ValueError("no such quarantine entry")
-            if trust and meta.get("digest"):
-                w.allow(meta["digest"], meta.get("signature"), f"restored {meta['path']} (uid {uid})")
-            target = quarantine.restore(self.cfg, qid)
-            w.finding_action(qid, "restored+trusted" if trust else "restored")
+            if trust and meta.get("digest"):       # every copy of this content
+                done = decide.trust(self.cfg, w, meta["digest"], meta.get("signature"),
+                                    f"restored {meta['path']} (uid {uid})")
+                target = next((p for p in done["restored"] if p.startswith(meta["path"])), meta["path"])
+            else:
+                target = quarantine.restore(self.cfg, qid)
+                w.finding_action(qid, "restored")
         finally:
             w.close()
         self.publish({"event": "quarantine_changed"})
@@ -526,12 +567,17 @@ class Api:
     def m_delete(self, idx, uid, qid: str):
         w = self._write_index()
         try:
-            quarantine.delete(self.cfg, qid)
-            w.finding_action(qid, "deleted")
+            meta = next((e for e in quarantine.entries(self.cfg) if e["id"] == qid), None)
+            if meta and meta.get("digest"):        # every copy of this content
+                n = decide.remove(self.cfg, w, meta["digest"])["deleted"]
+            else:
+                quarantine.delete(self.cfg, qid)
+                w.finding_action(qid, "deleted")
+                n = 1
         finally:
             w.close()
         self.publish({"event": "quarantine_changed"})
-        return {"deleted": qid}
+        return {"deleted": qid, "copies": n}
 
     def m_unfreeze(self, idx, uid):
         w = self._write_index()

@@ -62,7 +62,8 @@ class Daemon:
         self.stop = threading.Event()
         self.pending: dict[str, tuple[float, str]] = {}      # path -> (last event, process)
         self.pending_lock = threading.Lock()
-        self.work: list = []                                  # heap of (prio, ts, path, proc)
+        self.work: list = []                                  # heap of (prio, ts, path, proc, event)
+        self.held: set[str] = set()                           # detections left in place (see scanner)
         self.work_cv = threading.Condition()
         self.ransom_q: queue.Queue = queue.Queue(maxsize=100000)
         self.own_pids = {os.getpid()}
@@ -137,12 +138,20 @@ class Daemon:
                     pass
             if not poll.poll(1000):
                 continue
-            for path, pid, overflow, magic in fan.read():
+            for path, pid, overflow, magic, what in fan.read():
                 if overflow:
                     self.stats["overflows"] += 1
                     log("fanotify queue overflow: a sweep will catch up")
                     continue
                 if pid in self.own_pids:
+                    continue
+                if "start" in what and path in self.held:
+                    # a file with a detection that was left in place is being run
+                    log(f"started while waiting for a decision: {path} (by {_proc_name(pid)})")
+                    with self.work_cv:
+                        heapq.heappush(self.work, (-1, time.time(), path, _proc_name(pid), "started"))
+                        self.work_cv.notify()
+                if "write" not in what:
                     continue
                 self.stats["events"] += 1
                 if not cfg.is_watched(path):
@@ -218,11 +227,30 @@ class Daemon:
             log(f"could not start a quick check ({why}): {e}")
 
     # -------------------------------------------------------------- debounce
+    def refresh_held(self):
+        """Files with a detection that were left in place (also by the
+        nightly check, which is another process); the ones that are gone
+        are dropped from the list."""
+        from . import decide
+        try:
+            idx = Index(INDEX_PATH, self.vault)
+            try:
+                decide.prune_held(idx)
+                self.held = set(idx.held())
+            finally:
+                idx.close()
+        except Exception as e:
+            log(f"held files: {e}")
+
     def debouncer(self):
         cfg = self.cfg
         last_poll = 0.0
+        last_held = 0.0
         while not self.stop.wait(1.0):
             now = time.time()
+            if now - last_held > 60:
+                last_held = now
+                self.refresh_held()
             ready = []
             with self.pending_lock:
                 for p, (ts, proc) in list(self.pending.items()):
@@ -234,7 +262,7 @@ class Daemon:
                 with self.work_cv:
                     for p, proc in ready:
                         prio = 0 if cfg.is_priority(p) else 1
-                        heapq.heappush(self.work, (prio, now, p, proc))
+                        heapq.heappush(self.work, (prio, now, p, proc, "fresh"))
                         self.stats["queued"] += 1
                     self.work_cv.notify_all()
             # Without rename events: poll the category folders, and look
@@ -266,9 +294,10 @@ class Daemon:
         files = [top] if os.path.isfile(top) else walk(top, self.cfg, same_dev=False)
         now = time.time()
         n = 0
+        event = "" if proc == "user request" else "fresh"     # a folder that just arrived is new
         for p in files:
             with self.work_cv:
-                heapq.heappush(self.work, (prio, now, p, proc))
+                heapq.heappush(self.work, (prio, now, p, proc, event))
                 self.work_cv.notify()
             n += 1
             if n >= limit:
@@ -294,9 +323,13 @@ class Daemon:
         idx = Index(INDEX_PATH, self.vault)
         clamd = Clamd(self.cfg.clamd_socket)
         sc = Scanner(self.cfg, idx, clamd, log=log)
-        sc.on_finding = lambda r: self.api.publish({
-            "event": "finding", "verdict": r.verdict, "signature": r.signature,
-            "action": r.action, "path": r.path, "category": self.cfg.category_of(r.path)})
+        def found(r):
+            if r.action == "held":
+                self.held.add(r.path)
+            self.api.publish({
+                "event": "finding", "verdict": r.verdict, "signature": r.signature,
+                "action": r.action, "path": r.path, "category": self.cfg.category_of(r.path)})
+        sc.on_finding = found
         last_commit = time.time()
         while not self.stop.is_set():
             with self.work_cv:
@@ -307,14 +340,14 @@ class Daemon:
                         last_commit = time.time()
                 if self.stop.is_set():
                     break
-                prio, ts, path, proc = heapq.heappop(self.work)
+                prio, ts, path, proc, event = heapq.heappop(self.work)
             if not clamd.ping():
-                self._clamd_down(path, prio, proc)
+                self._clamd_down(path, prio, proc, event)
                 continue
             self.clamd_down_since = 0.0
             try:
                 self.current[n] = path
-                r = sc.scan(path, process=proc)
+                r = sc.scan(path, process=proc, fresh=event == "fresh", started=event == "started")
                 self.current.pop(n, None)
                 self.stats["scanned"] += 1
                 if r.verdict in ("infected", "suspicious", "warning"):
@@ -327,7 +360,7 @@ class Daemon:
         idx.commit()
         idx.close()
 
-    def _clamd_down(self, path, prio, proc):
+    def _clamd_down(self, path, prio, proc, event=""):
         now = time.time()
         if not self.clamd_down_since:
             self.clamd_down_since = now
@@ -335,7 +368,7 @@ class Daemon:
             notify(self.cfg, t("clamd_down_title"), t("clamd_down_body"), "high")
             self.clamd_down_since = -1.0      # notified; reset when clamd is back
         with self.work_cv:
-            heapq.heappush(self.work, (prio, now, path, proc))
+            heapq.heappush(self.work, (prio, now, path, proc, event))
         self.stop.wait(10)
 
     # -------------------------------------------------------------- ransom

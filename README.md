@@ -75,6 +75,13 @@ starts encrypting your files.
   and are scanned like everything else. In both, a name that pretends
   (`Movie.mp4.exe`) or a "video" that is really a program or an archive is
   quarantined.
+- **False alarms do not break things**: a detection in a file that has not
+  changed for a month, met by a background check, is reported and left in
+  place for you to decide; new and changed files, the category folders and
+  a program that is being started are quarantined at once. For Windows
+  programs the finding says whether the publisher signature is still intact
+  (a virus that writes itself into a program breaks it). One decision –
+  trust or delete – settles every copy of the same content on all disks.
 - **Ransomware shield**: documents that turn into random data, one program
   rewriting hundreds of existing files, or one program deleting documents
   while it writes unreadable files, raise an alarm. Your freeze commands
@@ -142,6 +149,8 @@ lguard verify | findings | history
 lguard scan <path>...          scan now
 lguard sweep [--full]          quick check of changed files / full disk scan
 lguard quarantine list | restore <id> [--allow] | delete <id>
+lguard held list | trust | quarantine | delete <sha256>
+                               detections in old files, left for you to decide
 lguard trust list | remove <sha256>
 lguard freeze | unfreeze       backups and sync (ransomware shield)
 lguard resume-process          let a program the shield suspended continue
