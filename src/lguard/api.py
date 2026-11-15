@@ -206,8 +206,14 @@ class Api:
                     self._send(conn, {"id": rid, "result": handler(idx, uid=uid, **params)})
                 except Exception as e:
                     self._send(conn, {"id": rid, "error": str(e)})
+                    if self.daemon is not None:
+                        self.daemon.note_error(e)      # a damaged inventory restarts the service
         except (OSError, ValueError):
             pass
+        except Exception as e:
+            self.log(f"api: {e!r}")
+            if self.daemon is not None:
+                self.daemon.note_error(e)
         finally:
             if idx is not None:
                 idx.close()
@@ -263,9 +269,11 @@ class Api:
             "category_modes": {k: self.cfg.mode_of(v[0]) if v else "downloads"
                                for k, v in self.cfg.categories.items()},
             "engine": eng, "signatures": db, "engine_ok": engine_ok,
-            "realtime": bool(d) and not d.stop.is_set(),
+            # "on" only while every part of the service is really running
+            "realtime": bool(d) and not d.stop.is_set() and d.healthy(),
+            "trouble": (d.fatal or "") if d else "",
             "watched": d.watched if d else [],
-            "files": idx.file_count(), "counts": counts,
+            "files": self._file_count(idx), "counts": counts,
             "last_sweep": idx.meta_get("last_sweep"),
             "frozen": idx.meta_get("frozen", "no"),
             "quarantine": len(quarantine.entries(self.cfg)),
@@ -280,6 +288,14 @@ class Api:
             "sweep_control": idx.meta_get("sweep_control") or {},
             "stats": dict(d.stats) if d else {},
         }
+
+    def _file_count(self, idx) -> int:
+        """Counting walks the whole inventory; the app asks every few seconds."""
+        at, n = getattr(self, "_files_cached", (0.0, 0))
+        if time.time() - at > 60:
+            n = idx.file_count()
+            self._files_cached = (time.time(), n)
+        return n
 
     @staticmethod
     def _sweep_progress(idx):

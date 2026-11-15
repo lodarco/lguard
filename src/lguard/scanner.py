@@ -27,18 +27,34 @@ class Result:
     detail: str | None = None
 
 
-def _digest(fd: int, size: int, hash_max: int = 0) -> str:
-    """SHA-256 of the whole content, byte by byte. hash_max > 0 allows a
-    cheaper fingerprint for files above it (off by default)."""
+# A file whose length is mostly holes costs nothing to make and hours to
+# read: one of a few exabytes would keep a scan worker busy for good.
+SPARSE_MIN = 4 << 30            # only files above this length are looked at for holes
+HASH_BUDGET_S = 3600            # nobody waits longer than this for one file
+
+
+def mostly_holes(st: os.stat_result) -> bool:
+    """A long file of which less than a quarter is really stored."""
+    return st.st_size > SPARSE_MIN and st.st_blocks * 512 < st.st_size // 4
+
+
+def _digest(fd: int, size: int, hash_max: int = 0, budget_s: float = HASH_BUDGET_S) -> str | None:
+    """SHA-256 of the whole content, byte by byte; None if reading it took
+    longer than budget_s. hash_max > 0 allows a cheaper fingerprint for
+    files above it (off by default)."""
     h = hashlib.sha256()
     if not hash_max or size <= hash_max:
-        off = 0
+        off = n = 0
+        end = time.monotonic() + budget_s
         while True:
             buf = os.pread(fd, 1 << 20, off)
             if not buf:
                 break
             h.update(buf)
             off += len(buf)
+            n += 1
+            if n % 256 == 0 and time.monotonic() > end:      # looked at every 256 reads
+                return None
         return h.hexdigest()
     # Fingerprint for very big files (videos): size + first and last MiB.
     h.update(str(size).encode())
@@ -146,12 +162,27 @@ class Scanner:
             kind = "iso"
         ext = filetype.ext_of(path)
         risky = filetype.is_risky(kind, ext)
+        unread = None                       # why the content could not be read through
         if digest is None and st.st_size:
-            digest = _digest(fd, st.st_size, cfg.hash_max)
+            if mostly_holes(st):
+                unread = "Lguard.Limits.Sparse"
+            else:
+                digest = _digest(fd, st.st_size, cfg.hash_max)
+                if digest is None:
+                    unread = "Lguard.Limits.TooSlow"
 
         verdict, signature, cached = "clean", None, False
         if st.st_size == 0:
             pass
+        elif unread:
+            # Its beginning and end are still shown to the engine; the file
+            # is never called clean.
+            try:
+                r = self.clamd.scan_partial(fd, st.st_size, cfg.partial_chunk)
+                verdict, signature = ("infected", r.signature) if r.infected else ("partial", unread)
+            except (ClamdError, OSError) as e:
+                verdict, signature = "error", None
+                self.log(f"clamd error on {path}: {e}")
         elif self.index.is_allowed(digest):
             signature = "allowed"
         else:

@@ -10,8 +10,10 @@ from . import config as config_mod
 from . import decide, quarantine, vault
 from .clamd import Clamd
 from .freeze import freeze, unfreeze
-from .i18n import set_language
+from . import index as index_mod
+from .i18n import set_language, t
 from .index import Index
+from .notify import notify, safe
 from .scanner import Scanner
 from .sweep import Sweep, walk
 
@@ -86,12 +88,57 @@ def _sweep_lock(wait: bool):
     return f
 
 
+def _service_active() -> bool:
+    import subprocess
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", "lguardd.service"], timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _inventory_damaged(why: str) -> int:
+    """Found by a check: the running service is the one that rebuilds the
+    inventory (it must be the only one using it), so it is restarted; the
+    check it then starts by itself does the work this one cannot."""
+    import subprocess
+    print(safe(f"lguard: the inventory is damaged ({why})"), file=sys.stderr)
+    if _service_active():
+        index_mod.mark_broken(index_path(), why)
+        subprocess.run(["systemctl", "restart", "--no-block", "lguardd.service"], timeout=30, check=False)
+        return 75
+    v = vault.Vault(vault.load_master_key())
+    kept = index_mod.rebuild(index_path(), v, why)
+    print(f"lguard: started a new inventory, kept {kept}")
+    return 0
+
+
+def _checked(fn):
+    """A scheduled check that stops with an error must not do so quietly."""
+    def run(cfg, args):
+        try:
+            return fn(cfg, args)
+        except Exception as e:
+            if index_mod.is_damage(e):
+                return _inventory_damaged(str(e))
+            try:
+                notify(cfg, t("self_title"), t("check_failed_body", why=f"{type(e).__name__}: {e}"[:300]), "high")
+            except Exception:
+                pass
+            raise
+    return run
+
+
+@_checked
 def cmd_sweep(cfg, args):
     _need_root()
     lock = _sweep_lock(wait=args.full)
     if lock is None:
         print("sweep: another scan is already running")
         return 0
+    # Every page of the inventory is read once per check, while nobody waits.
+    why = index_mod.looks_sound(index_path(), deep=not args.priority)
+    if why and _inventory_damaged(why):
+        return 75
     idx = open_index()
 
     def progress(**kw):
@@ -109,6 +156,7 @@ def cmd_sweep(cfg, args):
     print(f"\nsweep: {stats}")
 
 
+@_checked
 def cmd_maintenance(cfg, args):
     idx = open_index()
     sw = Sweep(cfg, Scanner(cfg, idx))
@@ -378,7 +426,19 @@ def main(argv=None):
         p.set_defaults(fn=cmd_freeze, action=name)
 
     args = ap.parse_args(argv)
-    cfg = config_mod.load(args.config)
+    for stream in (sys.stdout, sys.stderr):          # file names need not be valid UTF-8
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+    try:
+        cfg = config_mod.load(args.config)
+    except PermissionError:
+        # The settings are for root only (they may hold the address alerts
+        # are sent to); "status" without root asks the service instead.
+        if args.cmd != "status":
+            sys.exit("lguard: this command needs root (sudo lguard ...)")
+        cfg = config_mod.Config()
     set_language(cfg.language)
     return args.fn(cfg, args) or 0
 

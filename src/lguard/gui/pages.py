@@ -15,6 +15,13 @@ from .tr import _
 from .widgets import BarChart, Card, Dot, IconLabel, Switch, label, PulseBar
 
 
+def ask_plain(parent, title: str, text: str) -> bool:
+    """A yes/no question whose text (it holds a file path) is never read as markup."""
+    box = QMessageBox(QMessageBox.Question, title, text, QMessageBox.Yes | QMessageBox.No, parent)
+    box.setTextFormat(Qt.PlainText)
+    return box.exec() == QMessageBox.Yes
+
+
 # ------------------------------------------------------------------ helpers
 def human_bytes(n: float) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -472,7 +479,7 @@ class FindingsPage(Page):
 
     def confirm_delete_held(self, digest, path):
         text = f"{path}\n\n" + _("Delete this file forever?") + "\n" + _("Copies of the same content are deleted as well.")
-        if QMessageBox.question(self, _("Delete"), text) == QMessageBox.Yes:
+        if ask_plain(self, _("Delete"), text):
             self.client.request("fi.action", "decide", 600, digest=digest, action="delete")
 
     ACTIONS = {"held": "Left in place", "quarantined": "Quarantined", "deleted": "Deleted", "restored": "Restored",
@@ -541,7 +548,7 @@ class FindingsPage(Page):
 
     def confirm_delete(self, qid, path):
         text = f"{path}\n\n" + _("Delete this file forever?") + "\n" + _("Copies of the same content are deleted as well.")
-        if QMessageBox.question(self, _("Delete"), text) == QMessageBox.Yes:
+        if ask_plain(self, _("Delete"), text):
             self.client.request("fi.action", "delete", 600, qid=qid)
 
 

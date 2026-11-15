@@ -31,6 +31,7 @@ install -d "$C/opt/lguard/bin" "$C/usr/bin" "$C/etc/lguard" "$C/usr/lib/systemd/
 install -m 755 "$repo"/packaging/bin/* "$C/opt/lguard/bin/"
 ln -sf /opt/lguard/bin/lguard "$C/usr/bin/lguard"
 install -m 644 "$repo"/packaging/etc/* "$C/etc/lguard/"
+chmod 600 "$C/etc/lguard/lguard.toml"      # may come to hold where alerts are sent
 install -m 644 "$repo"/packaging/systemd/* "$C/usr/lib/systemd/system/"
 
 install -D -m 644 "$repo/packaging/polkit/io.github.lodarco.lguard.policy" \

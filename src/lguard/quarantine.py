@@ -99,7 +99,9 @@ def quarantine(cfg: Config, path: str, fd: int, st: os.stat_result, digest: str 
     # Where the scanned file really is now, according to the kernel - not
     # according to a path that may have been re-pointed since.
     real = os.readlink(f"/proc/self/fd/{fd}")
-    if not real.startswith("/") or real.endswith(" (deleted)"):
+    # (A deleted file keeps its old name with " (deleted)" appended; a file
+    # may really be called that, so the link count decides.)
+    if not real.startswith("/") or os.fstat(fd).st_nlink == 0:
         raise QuarantineError("file is gone")
     if not cfg.may_quarantine(real):
         raise QuarantineError(f"file is in a protected location ({real})")

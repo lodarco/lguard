@@ -245,6 +245,9 @@ class Card(QFrame):
 
 def label(text="", obj=None, wrap=False, size=None, bold=False) -> QLabel:
     lb = QLabel(text)
+    # Paths, program names and signers are written by anyone: they are shown
+    # as they are, never read as markup.
+    lb.setTextFormat(Qt.PlainText)
     if obj:
         lb.setObjectName(obj)
     lb.setWordWrap(wrap)

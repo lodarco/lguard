@@ -149,6 +149,10 @@ class Config:
     sweep_retro_days: int = 30
 
     def is_excluded(self, path: str) -> bool:
+        # Lguard's own files, whatever the settings say: opening its inventory
+        # as "a changed file" is what once damaged it (see Fanotify.protect).
+        if path.startswith(STATE_DIR + "/"):
+            return True
         for pat in self.excludes + self.extra_excludes:
             if fnmatch.fnmatchcase(path, pat):
                 return True
@@ -281,6 +285,6 @@ def write_app_settings(values: dict, path: str = CONFIG_PATH) -> str:
     tmp = out + ".tmp"
     with open(tmp, "w") as f:
         f.write(text)
-    os.chmod(tmp, 0o644)
+    os.chmod(tmp, 0o600)                 # settings may name where alerts go: root only
     os.replace(tmp, out)
     return out

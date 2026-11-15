@@ -10,8 +10,9 @@ import re
 import stat
 import time
 
+from . import index as index_mod
 from .config import Config
-from .scanner import Scanner
+from .scanner import Result, Scanner
 
 LOCAL_FS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "zfs", "jfs", "reiserfs",
             "fuseblk", "ntfs", "ntfs3", "vfat", "exfat"}
@@ -149,7 +150,13 @@ class Sweep:
         except OSError:
             size = 0
         self.report_progress(path)
-        r = self.scanner.scan(path, force=force)
+        try:
+            r = self.scanner.scan(path, force=force)
+        except Exception as e:
+            if index_mod.is_damage(e):
+                raise                            # the inventory itself: nothing here can go on
+            self.log(f"check failed: {path}: {e}")
+            r = Result(path, "error", detail=str(e))
         self.stats["seen"] += 1
         self.stats["bytes"] += size
         self._count(r)
@@ -249,7 +256,7 @@ class Sweep:
         content is checked by the engine again unless this very content was
         already checked with the current signatures."""
         from .index import identity_of
-        from .scanner import _digest
+        from .scanner import _digest, mostly_holes
         cutoff = time.time() - self.cfg.verify_cycle_days * 86400
         # files never verified or verified before the cycle cutoff first,
         # within that: category folders, then risky types, then oldest
@@ -276,12 +283,18 @@ class Sweep:
                 if identity_of(st) != row.identity():
                     self._scan(path)             # changed normally: plain rescan
                     continue
+                if row.digest is None or mostly_holes(st):
+                    continue                     # never read through (see scanner): nothing to compare
                 now_digest = _digest(fd, st.st_size, self.cfg.hash_max)
+                if now_digest is None:
+                    continue                     # too slow to read today
                 changed = now_digest != row.digest
                 if not changed:
                     self._count(self.scanner._scan_open(path, fd, st, dbver, None, row=row,
                                                         digest=now_digest, current_only=True))
             except Exception as e:
+                if index_mod.is_damage(e):
+                    raise
                 self.log(f"full disk scan: {path}: {e}")
                 continue
             finally:

@@ -68,6 +68,20 @@ MESSAGES = {
     "clamd_down_body": {"en": "The scan engine does not answer; files are queued.",
                         "de": "Die Scan-Engine antwortet nicht; Dateien warten in der Warteschlange.",
                         "es": "El motor de análisis no responde; los archivos esperan en cola."},
+    "self_title": {"en": "Lguard needs attention", "de": "Lguard braucht Aufmerksamkeit",
+                   "es": "Lguard necesita atención"},
+    "db_rebuilt_body": {
+        "en": "Lguard's own inventory was damaged ({why}). A new one was started; {decisions} of your decisions and {history} history entries were kept. Every file is being checked again.",
+        "de": "Das Inventar von Lguard war beschädigt ({why}). Ein neues wurde angelegt; {decisions} Ihrer Entscheidungen und {history} Verlaufseinträge blieben erhalten. Alle Dateien werden erneut geprüft.",
+        "es": "El inventario de Lguard estaba dañado ({why}). Se creó uno nuevo; se conservaron {decisions} de sus decisiones y {history} entradas del historial. Todos los archivos se comprueban de nuevo."},
+    "self_restart_body": {
+        "en": "A part of the protection stopped working ({what}). The service is restarting itself.",
+        "de": "Ein Teil des Schutzes funktioniert nicht mehr ({what}). Der Dienst startet sich neu.",
+        "es": "Una parte de la protección dejó de funcionar ({what}). El servicio se reinicia."},
+    "check_failed_body": {
+        "en": "The scheduled check stopped with an error and did not finish: {why}",
+        "de": "Die geplante Prüfung brach mit einem Fehler ab und wurde nicht beendet: {why}",
+        "es": "La comprobación programada se detuvo con un error y no terminó: {why}"},
     "media_clean_title": {"en": "{category}: download checked – clean", "de": "{category}: Download geprüft – sauber",
                           "es": "{category}: descarga comprobada – limpia"},
 }

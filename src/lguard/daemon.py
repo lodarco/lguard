@@ -23,12 +23,14 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 
 from . import config as config_mod
 from .clamd import Clamd
 from .api import Api
 from .fanotify import DirEvents, Fanotify
 from .i18n import set_language, t
+from . import index as index_mod
 from .index import Index
 from . import filetype, vault
 from . import notify as notify_mod
@@ -38,21 +40,45 @@ from .scanner import Scanner
 from .sweep import Sweep, roots
 
 INDEX_PATH = os.path.join(config_mod.STATE_DIR, "index.db")
+# The inventory and SQLite's two side files: see Fanotify.protect().
+INDEX_FILES = (INDEX_PATH, INDEX_PATH + "-wal", INDEX_PATH + "-shm")
+SELF_ALERT_FILE = os.path.join(config_mod.STATE_DIR, "self-alert")
 
 
 def log(msg: str):
-    print(msg, flush=True)
+    print(notify_mod.safe(msg), flush=True)
+
+
+def self_alert(cfg, body: str, every_s: int = 1800):
+    """Tell the user that Lguard itself is in trouble - but not on every
+    restart of a service that keeps failing."""
+    try:
+        if time.time() - os.stat(SELF_ALERT_FILE).st_mtime < every_s:
+            return
+    except OSError:
+        pass
+    try:
+        with open(SELF_ALERT_FILE, "w") as f:
+            f.write(notify_mod.safe(body)[:500] + "\n")
+    except OSError:
+        pass
+    try:
+        notify(cfg, t("self_title"), body, "urgent")
+    except Exception as e:
+        log(f"could not send the alert: {e}")
 
 
 def _proc_name(pid: int) -> str:
     try:
         return os.readlink(f"/proc/{pid}/exe")
     except OSError:
-        try:
-            with open(f"/proc/{pid}/comm") as f:
-                return f.read().strip()
-        except OSError:
-            return f"pid {pid}"
+        pass
+    try:
+        # A process may call itself anything, including bytes that are no text.
+        with open(f"/proc/{pid}/comm", "rb") as f:
+            return f.read().decode("utf-8", "replace").strip() or f"pid {pid}"
+    except Exception:
+        return f"pid {pid}"
 
 
 class Daemon:
@@ -75,6 +101,49 @@ class Daemon:
         self.clamd_down_since = 0.0
         self.names: DirEvents | None = None                   # rename/delete events (Linux 5.9+)
         self.recheck: dict[str, float] = {}                   # folder -> look again until
+        self.threads: list[threading.Thread] = []             # all of them must stay alive
+        self.fatal: str | None = None                         # why the service must restart itself
+
+    # ---------------------------------------------------------- self-checks
+    def fail(self, why: str):
+        """Something this service cannot repair while running: stop, so that
+        systemd starts it again (a restart also rebuilds a damaged inventory)."""
+        if self.fatal is None:
+            self.fatal = why
+            log(f"FATAL: {why}")
+
+    def note_error(self, e: BaseException):
+        """Called wherever the inventory is used and an error is caught."""
+        if index_mod.is_damage(e):
+            index_mod.mark_broken(INDEX_PATH, str(e))
+            self.fail(f"inventory damaged: {e}")
+
+    def deep_check(self):
+        try:
+            why = index_mod.looks_sound(INDEX_PATH, deep=True)
+        except Exception as e:
+            log(f"inventory check: {e}")
+            return
+        if why:
+            index_mod.mark_broken(INDEX_PATH, why)
+            self.fail(f"inventory damaged: {why}")
+
+    def _thread(self, target, name: str, args=()) -> threading.Thread:
+        """A thread that reports its own death instead of vanishing."""
+        def body():
+            try:
+                target(*args)
+            except BaseException as e:           # noqa: B036 - nothing may pass silently here
+                log(f"thread {name} died: {e!r}\n{traceback.format_exc()}")
+                self.note_error(e)
+            if not self.stop.is_set():
+                self.fail(f"{name} stopped")
+        th = threading.Thread(target=body, name=name, daemon=True)
+        self.threads.append(th)
+        return th
+
+    def healthy(self) -> bool:
+        return self.fatal is None and all(th.is_alive() for th in self.threads)
 
     # ---------------------------------------------------------------- reader
     def _watch(self, fan: Fanotify, announce: bool = True):
@@ -117,13 +186,14 @@ class Daemon:
 
     def reader(self):
         fan = Fanotify()
+        fan.protect(INDEX_FILES)              # before any filesystem is marked
         try:
             self.names = DirEvents()
         except OSError as e:
             log(f"rename events not available on this kernel ({e.strerror}): category folders are polled instead")
         self._watch(fan)
         if self.names is not None:
-            threading.Thread(target=self.names_reader, name="names", daemon=True).start()
+            self._thread(self.names_reader, "names").start()
         poll = select.poll()
         poll.register(fan.fd, select.POLLIN)
         cfg = self.cfg
@@ -131,6 +201,11 @@ class Daemon:
         while not self.stop.is_set():
             if time.time() - last_mounts > 5:
                 last_mounts = time.time()
+                fan.protect(INDEX_FILES)
+                if len(fan.kept) > 32:
+                    # Should not happen (the kernel filters them); if it does,
+                    # a restart is cheaper than a pile of open descriptors.
+                    self.fail("events on the inventory keep arriving")
                 try:
                     if self._watch(fan, announce=False):
                         self.start_sweep("new disk")      # what is already on it
@@ -241,6 +316,7 @@ class Daemon:
                 idx.close()
         except Exception as e:
             log(f"held files: {e}")
+            self.note_error(e)
 
     def debouncer(self):
         cfg = self.cfg
@@ -315,6 +391,7 @@ class Daemon:
                 log(f"priority poll: {sw.stats}")
         except Exception as e:
             log(f"priority poll failed: {e}")
+            self.note_error(e)
         finally:
             idx.close()
 
@@ -353,7 +430,9 @@ class Daemon:
                 if r.verdict in ("infected", "suspicious", "warning"):
                     log(f"{r.verdict}: {r.signature} {r.action} {path} (by {proc})")
             except Exception as e:
+                self.current.pop(n, None)
                 log(f"scan failed {path}: {e}")
+                self.note_error(e)
             if time.time() - last_commit > 5:
                 idx.commit()
                 last_commit = time.time()
@@ -387,6 +466,7 @@ class Daemon:
                     det.feed(path, proc, pid, what)
                 except Exception as e:
                     log(f"ransom detector error {path}: {e}")
+                    self.note_error(e)
             if time.time() - last_commit > 5:
                 idx.commit()
                 last_commit = time.time()
@@ -434,9 +514,32 @@ class Daemon:
                 break
         idx.close()
 
-    def run(self, workers: int = 2):
+    def open_inventory(self):
+        """The inventory, rebuilt first if an earlier run found it damaged or
+        it does not open. Returns (index, reason for a full check or None)."""
+        why = None
+        try:
+            with open(index_mod.broken_marker(INDEX_PATH)) as f:
+                why = f.read().strip() or "marked as damaged"
+        except OSError:
+            why = index_mod.looks_sound(INDEX_PATH)
+        if why is None:
+            return Index(INDEX_PATH, self.vault), None
+        log(f"inventory damaged ({why}): starting a new one")
+        kept = index_mod.rebuild(INDEX_PATH, self.vault, why)
         idx = Index(INDEX_PATH, self.vault)
-        catch_up = "inventory was rolled back" if self.check_anchor(idx) else None
+        try:
+            vault.write_anchor(*idx.ledger_head())     # the new history is the one that counts
+        except Exception as e:
+            log(f"anchor write failed: {e}")
+        log(f"inventory rebuilt, kept {kept}")
+        self_alert(self.cfg, t("db_rebuilt_body", why=why[:200], decisions=kept["allow"] + kept["meta"],
+                               history=kept["ledger"]), every_s=0)
+        return idx, "inventory was rebuilt"
+
+    def run(self, workers: int = 2):
+        idx, rebuilt = self.open_inventory()
+        catch_up = "inventory was rolled back" if self.check_anchor(idx) else rebuilt
         clean = idx.meta_get("clean_shutdown", True)
         if not clean:
             idx.event("gap", "previous run did not stop cleanly: a sweep will catch up")
@@ -444,15 +547,18 @@ class Daemon:
         idx.meta_set("clean_shutdown", False)
         idx.event("daemon_start", f"roots={roots(self.cfg)} priority={self.cfg.all_priority_paths}")
         idx.commit()
-        threads = [threading.Thread(target=self.reader, name="reader", daemon=True),
-                   threading.Thread(target=self.debouncer, name="debounce", daemon=True),
-                   threading.Thread(target=self.ransom, name="ransom", daemon=True),
-                   threading.Thread(target=self.anchorer, name="anchor", daemon=True),
-                   threading.Thread(target=self.api.serve, args=(self.stop,), name="api", daemon=True)]
-        threads += [threading.Thread(target=self.worker, args=(i,), name=f"scan{i}", daemon=True)
-                    for i in range(workers)]
+        threads = [self._thread(self.reader, "reader"),
+                   self._thread(self.debouncer, "debounce"),
+                   self._thread(self.ransom, "ransom"),
+                   self._thread(self.anchorer, "anchor"),
+                   self._thread(self.api.serve, "api", (self.stop,))]
+        threads += [self._thread(self.worker, f"scan{i}", (i,)) for i in range(workers)]
         for th in threads:
             th.start()
+        # Once per start, beside the work: every page of the inventory is
+        # read. Damage left by an earlier version is found here, right after
+        # the update, not at the first file that happens to touch it.
+        threading.Thread(target=self.deep_check, name="selfcheck", daemon=True).start()
         if catch_up:
             self.start_sweep(catch_up)        # what changed while nobody was watching
 
@@ -464,29 +570,56 @@ class Daemon:
         signal.signal(signal.SIGINT, _stop)
         last = time.time()
         while not self.stop.wait(1):
+            if self.fatal:
+                # A part of the service is gone or the inventory is damaged:
+                # say so and let systemd start a whole new service.
+                self_alert(self.cfg, t("self_restart_body", what=self.fatal[:300]))
+                _stop()
+                break
             if time.time() - last > 600:
                 last = time.time()
                 log(f"stats {self.stats} pending={len(self.pending)} queue={len(self.work)}")
-        for th in threads:
+        for th in list(self.threads):
             th.join(timeout=15)
-        idx.event("daemon_stop", str(self.stats))
-        idx.meta_set("clean_shutdown", True)
-        idx.commit()
-        vault.write_anchor(*idx.ledger_head())
-        idx.close()
+        try:
+            idx.event("daemon_stop", self.fatal or str(self.stats))
+            idx.meta_set("clean_shutdown", self.fatal is None)
+            idx.commit()
+            vault.write_anchor(*idx.ledger_head())
+            idx.close()
+        except Exception as e:
+            log(f"could not close the inventory: {e}")
+            self.note_error(e)
         log("stopped")
+        if self.fatal:
+            sys.exit(1)
 
 
 def main():
     if os.geteuid() != 0:
         sys.exit("lguardd must run as root")
+    for stream in (sys.stdout, sys.stderr):          # file names need not be valid UTF-8
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
     cfg = config_mod.load(sys.argv[1] if len(sys.argv) > 1 else config_mod.CONFIG_PATH)
     set_language(cfg.language)
     try:
         v = vault.Vault(vault.load_master_key())
     except vault.VaultError as e:
         sys.exit(f"lguardd: {e}")
-    Daemon(cfg, v).run()
+    try:
+        Daemon(cfg, v).run()
+    except SystemExit:
+        raise
+    except BaseException as e:
+        # Not starting at all is the one failure nobody would notice.
+        log(f"lguardd could not run: {e!r}\n{traceback.format_exc()}")
+        if index_mod.is_damage(e):
+            index_mod.mark_broken(INDEX_PATH, str(e))
+        self_alert(cfg, t("self_restart_body", what=f"{type(e).__name__}: {e}"[:300]))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,12 @@ install -d -m 0700 -o root -g root /var/lib/lguard/quarantine
 install -d -m 0755 -o lguard-clamav -g lguard /var/lib/lguard/clamav
 install -d -m 0750 -o lguard-clamav -g lguard /var/log/lguard
 
+# The settings may name where alerts are sent (a private address or token)
+# and what is run when ransomware is suspected: for root only.
+for f in /etc/lguard/lguard.toml /etc/lguard/lguard.d/*.toml; do
+  [ -f "$f" ] && chown root:root "$f" && chmod 0600 "$f"
+done
+
 # Self-check of what was just installed (manifest shipped in the package).
 if ! (cd / && sha256sum --quiet -c /opt/lguard/MANIFEST.sha256); then
   echo "lguard: installed files do not match the package manifest" >&2

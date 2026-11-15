@@ -17,6 +17,16 @@ _PRIO_SYSLOG = {"min": syslog.LOG_DEBUG, "low": syslog.LOG_INFO, "default": sysl
 skip_uids = lambda: set()        # noqa: E731
 
 
+def safe(text: str) -> str:
+    """Text that can always be printed and sent. A file name is bytes and
+    need not be valid UTF-8; such bytes are shown as \\xNN instead of making
+    the journal, the notification - or the thread writing them - fail."""
+    try:
+        return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def _plain(text: str) -> str:
     """File names come from anyone; notification servers may read markup."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -40,8 +50,12 @@ def _desktop_users():
 def notify(cfg: Config, title: str, message: str, priority: str = "default", covered: bool = False):
     """covered = the connected apps are told about this by an event of their
     own, so they do not need the plain desktop popup as well."""
-    syslog.openlog("lguard", 0, syslog.LOG_DAEMON)
-    syslog.syslog(_PRIO_SYSLOG.get(priority, syslog.LOG_NOTICE), f"{title}: {message}")
+    title, message = safe(title), safe(message)
+    try:
+        syslog.openlog("lguard", 0, syslog.LOG_DAEMON)
+        syslog.syslog(_PRIO_SYSLOG.get(priority, syslog.LOG_NOTICE), f"{title}: {message}".replace("\0", " "))
+    except Exception:
+        pass                     # the alert itself matters more than its copy in the journal
 
     if cfg.notify_command:
         args = [a.replace("{title}", title).replace("{message}", message).replace("{priority}", priority)

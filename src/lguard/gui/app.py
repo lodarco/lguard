@@ -52,7 +52,7 @@ class Notifier(QObject):
             args.append(f"--action={key}={text}")
         if actions:
             args.append("--wait")
-        args += [title, body]
+        args += ["--", title, body]          # a file name may begin with "-"
         p = QProcess(self)
         p.finished.connect(lambda *_a, proc=p: self._done(proc))
         p.start(self.exe, args)

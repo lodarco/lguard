@@ -43,6 +43,138 @@ CREATE TABLE IF NOT EXISTS ledger (
 
 GENESIS = b"\0" * 32
 
+# What survives a rebuild of a damaged inventory besides the history: the
+# decisions the user made and the switches that must not flip by themselves.
+KEEP_META = ("held", "condemned", "frozen", "stopped")
+
+
+def is_damage(e: BaseException) -> bool:
+    """True for an error that means the inventory file itself is broken (as
+    opposed to busy, locked or full)."""
+    if not isinstance(e, sqlite3.DatabaseError):
+        return False
+    code = getattr(e, "sqlite_errorcode", None)
+    if code is not None:
+        return code & 0xFF in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB, sqlite3.SQLITE_IOERR)
+    msg = str(e).lower()
+    return "malformed" in msg or "disk i/o error" in msg or "not a database" in msg
+
+
+def broken_marker(path: str) -> str:
+    return path + ".broken"
+
+
+def mark_broken(path: str, why: str) -> None:
+    """Leave a note for the next start of the service: rebuild the inventory."""
+    try:
+        with open(broken_marker(path), "w") as f:
+            f.write(why[:500] + "\n")
+    except OSError:
+        pass
+
+
+def looks_sound(path: str, deep: bool = False) -> str | None:
+    """None if the inventory opens and answers; else what is wrong. deep =
+    walk every page (the nightly check does that; it takes a while)."""
+    if not os.path.exists(path):
+        return None
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60)
+        try:
+            for table in ("files", "hashes", "allow", "meta", "daily", "ledger"):
+                db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            if deep:
+                r = db.execute("PRAGMA quick_check(1)").fetchone()
+                if not r or r[0] != "ok":
+                    return str(r[0] if r else "no answer")[:300]
+        finally:
+            db.close()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return None                       # an older or empty file: the schema is added on open
+        return str(e) if is_damage(e) else None
+    except sqlite3.DatabaseError as e:
+        return str(e)
+    return None
+
+
+def rebuild(path: str, vault: Vault, why: str = "") -> dict:
+    """Set a damaged inventory aside and start a new one.
+
+    The list of files and the remembered verdicts are dropped (every file is
+    simply checked again). What the user decided and the history are copied
+    over as far as they can still be read; every record is authenticated, so
+    nothing garbled gets across. Must run while no other process has the
+    inventory open (the service does it at start). Returns what was kept."""
+    aside = path + ".damaged"
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.unlink(aside + suffix)
+        except OSError:
+            pass
+    os.replace(path, aside)
+    if os.path.exists(path + "-wal"):
+        os.replace(path + "-wal", aside + "-wal")
+    for extra in (path + "-shm", broken_marker(path)):
+        try:
+            os.unlink(extra)
+        except OSError:
+            pass
+
+    kept = {"allow": 0, "daily": 0, "ledger": 0, "meta": 0}
+    new = Index(path, vault)
+    try:
+        old = sqlite3.connect(f"file:{aside}?mode=ro", uri=True, timeout=30)
+        old.text_factory = bytes
+    except sqlite3.Error:
+        old = None
+    if old is not None:
+        for table in ("allow", "daily"):
+            try:
+                for rid, nonce, ct in old.execute(f"SELECT id, nonce, ct FROM {table}"):
+                    try:
+                        vault.open(table, bytes(rid), bytes(nonce), bytes(ct))
+                    except (TamperError, TypeError, ValueError):
+                        continue
+                    new.db.execute(f"INSERT OR REPLACE INTO {table}(id, nonce, ct) VALUES (?,?,?)",
+                                   (bytes(rid), bytes(nonce), bytes(ct)))
+                    kept[table] += 1
+            except sqlite3.Error:
+                pass
+        for key in KEEP_META:
+            try:
+                rid = vault.rid("meta", key)
+                r = old.execute("SELECT nonce, ct FROM meta WHERE id=?", (rid,)).fetchone()
+                if r:
+                    new.meta_set(key, vault.open("meta", rid, bytes(r[0]), bytes(r[1]))["v"])
+                    kept["meta"] += 1
+            except (sqlite3.Error, TamperError, TypeError, ValueError, KeyError):
+                pass
+        # The history is a chain: it is taken up to the first entry that is
+        # missing or does not fit.
+        try:
+            prev, expect = GENESIS, 1
+            for seq, ts, nonce, ct, chain in old.execute(
+                    "SELECT seq, ts, nonce, ct, chain FROM ledger ORDER BY seq"):
+                if seq != expect or vault.chain(bytes(prev), seq, ts, bytes(nonce), bytes(ct)) != bytes(chain):
+                    break
+                new.db.execute("INSERT INTO ledger(seq, ts, nonce, ct, chain) VALUES (?,?,?,?,?)",
+                               (seq, ts, bytes(nonce), bytes(ct), bytes(chain)))
+                kept["ledger"] += 1
+                prev, expect = chain, seq + 1
+        except (sqlite3.Error, TypeError, ValueError, AttributeError):
+            pass
+        old.close()
+    new.event("inventory_rebuilt", f"{why[:300]}; kept {kept}")
+    new.commit()
+    new.close()
+    for suffix in ("-wal", "-shm"):               # made by reading the old file
+        try:
+            os.unlink(aside + suffix)
+        except OSError:
+            pass
+    return kept
+
 
 @dataclass
 class FileRow:

@@ -28,6 +28,8 @@ FAN_UNLIMITED_QUEUE = 0x10
 
 FAN_MARK_ADD = 0x01
 FAN_MARK_MOUNT = 0x10
+FAN_MARK_IGNORED_MASK = 0x20
+FAN_MARK_IGNORED_SURV_MODIFY = 0x40
 FAN_MARK_FILESYSTEM = 0x100
 
 FAN_CLOSE_WRITE = 0x08
@@ -61,6 +63,45 @@ class Fanotify:
             raise OSError(e, f"fanotify_init: {os.strerror(e)}")
         self.fd = fd
         self.exec_events = True         # until a kernel refuses FAN_OPEN_EXEC
+        # Files of this very process that must never come back as an event
+        # descriptor (see protect()).
+        self._protected_paths: set[str] = set()
+        self._protected_inodes: set[tuple[int, int]] = set()
+        self.kept: list[int] = []       # descriptors of protected files that did arrive
+
+    def protect(self, paths) -> None:
+        """Keep these files out of the event stream.
+
+        An event arrives as a descriptor the kernel opened in this process,
+        and it has to be closed. Closing ANY descriptor of a file drops every
+        POSIX lock the process holds on that file - also the locks SQLite
+        holds on the inventory and its -wal/-shm. The next process to close
+        the inventory then believes it is the last user, deletes the log, and
+        the inventory is damaged. So events on these files are switched off
+        in the kernel (an ignore mark on the inode), and should one arrive
+        anyway its descriptor is kept open instead of closed (read()).
+
+        Call it after the files exist and before any filesystem is marked;
+        calling again picks up files that appeared since."""
+        for path in paths:
+            self._protected_paths.add(path)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            key = (st.st_dev, st.st_ino)
+            if key in self._protected_inodes:
+                continue
+            self._protected_inodes.add(key)
+            for mask in (FAN_CLOSE_WRITE | FAN_OPEN_EXEC, FAN_CLOSE_WRITE):
+                r = _libc.fanotify_mark(self.fd, FAN_MARK_ADD | FAN_MARK_IGNORED_MASK | FAN_MARK_IGNORED_SURV_MODIFY,
+                                        mask, AT_FDCWD, path.encode())
+                if r == 0:
+                    break
+
+    def is_protected(self, path: str | None, st: os.stat_result | None) -> bool:
+        return (path in self._protected_paths
+                or (st is not None and (st.st_dev, st.st_ino) in self._protected_inodes))
 
     def mark(self, path: str) -> str:
         """Watch the filesystem containing `path` (falls back to the mount
@@ -95,15 +136,26 @@ class Fanotify:
                 continue
             what = "+".join(w for w, bit in (("write", FAN_CLOSE_WRITE), ("start", FAN_OPEN_EXEC)) if mask & bit)
             magic = b""
+            path, st = None, None
             try:
+                st = os.fstat(fd)
                 path = os.readlink(f"/proc/self/fd/{fd}")
-                if mask & FAN_CLOSE_WRITE:
+            except OSError:
+                pass
+            if self.is_protected(path, st):
+                self.kept.append(fd)            # never closed: see protect()
+                continue
+            try:
+                if path and mask & FAN_CLOSE_WRITE:
                     magic = os.pread(fd, 8, 0)  # costs nothing: the file is already open
             except OSError:
                 path = None
             finally:
                 os.close(fd)
-            if path and not path.endswith(" (deleted)"):
+            # A file that was deleted meanwhile has no name any more. (The
+            # kernel marks it by appending " (deleted)" to the old name, but a
+            # file may really be called that: the link count tells.)
+            if path and st is not None and st.st_nlink > 0:
                 yield path, pid, False, magic, what
 
     def close(self):
