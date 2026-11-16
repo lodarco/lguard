@@ -182,11 +182,16 @@ class RansomDetector:
         self._combo(proc, now)
 
     def _keys(self, proc: str) -> list[str]:
-        """What a write or a deletion is counted under: the program, and the
-        user it runs as (one program writing while another deletes is still
-        one user's doing)."""
-        uid = self.uid_of.get(proc)
-        return [proc] if uid is None else [proc, f"user:{uid}"]
+        """What a write or a deletion is counted under: the program that did
+        it, and nothing else.
+
+        0.2.3 also added everything up per user, so that one program writing
+        while another deletes would still be caught. That turned an ordinary
+        evening into an attack: a game launcher clearing its runtime folder
+        while the game filled its shader cache was two harmless programs of
+        one user, and the game was suspended. What one user's programs do
+        together is simply what using a computer looks like."""
+        return [proc]
 
     def _combo(self, proc: str, now: float):
         cfg = self.cfg

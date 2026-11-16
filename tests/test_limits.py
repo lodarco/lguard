@@ -150,17 +150,27 @@ class Ransom(unittest.TestCase):
         self.assertIn("User:", self.bodies[0])
         self.assertIn("NOT frozen again", self.bodies[-1])
 
-    def test_work_split_between_two_programs_of_one_user_still_adds_up(self):
-        self.cfg.ransom_combo_files = 5
-        det = self.det
-        det.uid_of["/home/x/writer"] = det.uid_of["/home/x/deleter"] = 1000
+    def _split(self, writer, deleter, n=40):
         from lguard.index import FileRow
-        for i in range(5):
-            known = os.path.join(self.top, "home", f"old{i}.docx")
-            self.idx.put(FileRow(known, 1, i, 10, 1, 1, "d" * 64, "zip", 0, "clean", None, 1, 1.0))
-            det.feed(known, "/home/x/deleter", 0, "delete")
-            new = write(os.path.join(self.top, "home", f"new{i}.bin"), os.urandom(70000))
-            det.feed(new, "/home/x/writer", 0)
+        for i in range(n):
+            known = os.path.join(self.top, "home", f"old{i}.json")
+            self.idx.put(FileRow(known, 1, i, 10, 1, 1, "d" * 64, "text", 0, "clean", None, 1, 1.0))
+            self.det.feed(known, deleter, 0, "delete")
+            new = write(os.path.join(self.top, "home", f"cache{i}"), os.urandom(70000))
+            self.det.feed(new, writer, 0)
+
+    def test_two_programs_of_one_user_doing_ordinary_things_are_not_an_attack(self):
+        # A launcher clears its runtime folder (hundreds of small files go)
+        # while the game it starts fills its shader cache (dense new files).
+        self.cfg.ransom_combo_files = 30
+        self.det.uid_of["/home/x/launcher"] = self.det.uid_of["/home/x/game"] = 1000
+        self._split(writer="/home/x/game", deleter="/home/x/launcher")
+        self.assertEqual(self.bodies, [])
+        self.assertEqual(self.frozen, [])
+
+    def test_one_program_doing_both_is(self):
+        self.cfg.ransom_combo_files = 30
+        self._split(writer="/home/x/tool", deleter="/home/x/tool")
         self.assertEqual(len(self.bodies), 1)
 
 

@@ -1,5 +1,13 @@
 # Changes
 
+## 0.2.4
+
+- The ransomware shield raised a false alarm and suspended a game: 0.2.3
+  added up what all programs of one user delete and write, so a launcher
+  clearing its runtime folder while the game filled its shader cache looked
+  like "one program deleting documents and writing unreadable files". Files
+  are counted per program again, as before 0.2.3.
+
 ## 0.2.3
 
 Ways past the guard that are closed
@@ -24,8 +32,7 @@ Ways past the guard that are closed
   and to the engine with another).
 
 Ransomware shield
-- Files are counted per program and per user: one program writing while
-  another deletes is still one user's doing.
+- (Withdrawn in 0.2.4: counting per user as well as per program.)
 - After an alarm, a second program behaving the same way is suspended too
   instead of being ignored for half an hour.
 - The alarm names the user. One user can cause three freezes of the
