@@ -5,8 +5,11 @@ import os
 import pwd
 import subprocess
 import syslog
+import threading
+import time
 
 from .config import Config
+from .i18n import t
 
 _PRIO_SYSLOG = {"min": syslog.LOG_DEBUG, "low": syslog.LOG_INFO, "default": syslog.LOG_NOTICE,
                 "high": syslog.LOG_WARNING, "urgent": syslog.LOG_CRIT}
@@ -47,10 +50,43 @@ def _desktop_users():
         return
 
 
+_sent: list[float] = []          # when the last alerts went out
+_held_back = 0                   # how many were not sent since
+_lock = threading.Lock()
+WINDOW_S = 600
+
+
+def _allow(cfg: Config, priority: str) -> tuple[bool, int]:
+    """(send this one?, how many were held back before it). Urgent alerts
+    (ransomware, Lguard itself failing) always go out."""
+    global _held_back
+    now = time.time()
+    with _lock:
+        while _sent and _sent[0] < now - WINDOW_S:
+            _sent.pop(0)
+        if priority != "urgent" and len(_sent) >= max(1, cfg.alert_burst):
+            _held_back += 1
+            return False, 0
+        _sent.append(now)
+        before, _held_back = _held_back, 0
+        return True, before
+
+
 def notify(cfg: Config, title: str, message: str, priority: str = "default", covered: bool = False):
     """covered = the connected apps are told about this by an event of their
     own, so they do not need the plain desktop popup as well."""
     title, message = safe(title), safe(message)
+    ok, before = _allow(cfg, priority)
+    if not ok:
+        # Still in the journal and in the history; just not on the phone and the screen.
+        try:
+            syslog.openlog("lguard", 0, syslog.LOG_DAEMON)
+            syslog.syslog(syslog.LOG_NOTICE, f"(alert not sent, too many at once) {title}: {message}".replace("\0", " "))
+        except Exception:
+            pass
+        return
+    if before:
+        message += "\n" + t("alerts_held_back", n=before)
     try:
         syslog.openlog("lguard", 0, syslog.LOG_DAEMON)
         syslog.syslog(_PRIO_SYSLOG.get(priority, syslog.LOG_NOTICE), f"{title}: {message}".replace("\0", " "))

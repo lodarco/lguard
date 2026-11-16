@@ -115,6 +115,8 @@ class Scanner:
             return Result(path, "error", detail=str(e))
         if not stat.S_ISREG(st.st_mode):
             return Result(path, "skipped", detail="not a regular file")
+        if cfg.is_downloading(path, st.st_mtime):
+            return Result(path, "skipped", detail="download in progress")
 
         dbver = self.db_version
         row = self.index.get(path)
@@ -194,8 +196,11 @@ class Scanner:
                 verdict, signature, cached = hv["verdict"], hv["signature"], True
             else:
                 try:
-                    media = kind in filetype.MEDIA_KINDS
-                    whole = st.st_size <= cfg.full_scan_max and not (media and st.st_size > cfg.media_partial_min)
+                    # "Media" only if it holds together as the film it starts
+                    # like; anything else that big is "partial", never clean.
+                    media = (kind in filetype.MEDIA_KINDS and st.st_size > cfg.media_partial_min
+                             and filetype.media_structure_ok(fd, st.st_size, kind))
+                    whole = st.st_size <= cfg.full_scan_max and not media
                     if whole:
                         r = self.clamd.scan_fd(fd)
                     else:
@@ -207,7 +212,15 @@ class Scanner:
                         verdict, signature = "partial", r.signature or "Lguard.Limits.TooLarge"
                     else:
                         verdict, signature = "clean", r.signature
-                    if digest:
+                    # The verdict is remembered for this content only if the
+                    # file is still what was hashed: otherwise someone could
+                    # show the hash step one content and the engine another,
+                    # and have the first one remembered as clean.
+                    now_st = os.fstat(fd)
+                    if identity_of(now_st) != identity_of(st):
+                        verdict, signature = "error", None
+                        self.log(f"changed while being checked, will be checked again: {path}")
+                    elif digest:
                         self.index.put_hash(digest, verdict, signature, dbver)
                 except (ClamdError, OSError) as e:
                     verdict, signature = "error", None

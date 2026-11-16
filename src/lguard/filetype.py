@@ -81,6 +81,72 @@ ACTIVE_DOC_EXT = {"html", "htm", "mht", "svg", "rtf", "eml", "msg", "one", "chm"
                   "xlam", "ppam", "dotm", "xltm", "iqy", "slk", "wasm", "class", "swf"}
 
 
+_MP4_ATOMS = {b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"uuid", b"moof", b"mfra", b"sidx",
+              b"styp", b"meta", b"pnot", b"PICT", b"pdin", b"ssix", b"prft", b"emsg"}
+
+
+def media_structure_ok(fd: int, size: int, kind_: str) -> bool:
+    """Does the file hold together as the film or sound file its first bytes
+    claim to be? A big media file is only checked at its beginning and end
+    (there is nothing inside for the engine to unpack), and that is only
+    sound if it really is one: a disk image or an archive that merely starts
+    like a film must not pass as checked. Cheap: a few short reads."""
+    try:
+        if kind_ == "mp4":                       # boxes, each saying how long it is, must add up to the file
+            off, n = 0, 0
+            while off < size and n < 10000:
+                h = os.pread(fd, 16, off)
+                if len(h) < 8:
+                    return False
+                length, name = int.from_bytes(h[:4], "big"), h[4:8]
+                if name not in _MP4_ATOMS:
+                    return False
+                if length == 1:
+                    if len(h) < 16:
+                        return False
+                    length = int.from_bytes(h[8:16], "big")
+                elif length == 0:
+                    return True                  # "to the end of the file"
+                if length < 8:
+                    return False
+                off += length
+                n += 1
+            return off == size
+        if kind_ == "ebml":                      # Matroska/WebM: a header, then one Segment
+            head = os.pread(fd, 4096, 0)
+            if head[:4] != b"\x1a\x45\xdf\xa3" or len(head) < 12:
+                return False
+            width = 8 - head[4].bit_length() + 1 if head[4] else 9
+            if width > 8:
+                return False
+            hlen = int.from_bytes(bytes([head[4] & (0xFF >> width)]) + head[5:4 + width], "big")
+            seg = 4 + width + hlen
+            return os.pread(fd, 4, seg) == b"\x18\x53\x80\x67"
+        if kind_ in ("avi", "wav"):              # RIFF chunks that follow one another to the end
+            off, n = 0, 0
+            while off < size and n < 4096:
+                h = os.pread(fd, 12, off)
+                if len(h) < 12 or h[:4] not in (b"RIFF", b"RF64"):
+                    return False
+                length = int.from_bytes(h[4:8], "little")
+                if h[:4] == b"RF64" or length == 0xFFFFFFFF:
+                    return n == 0                # a 64-bit length kept elsewhere: one chunk to the end
+                off += 8 + length + (length & 1)
+                n += 1
+            return off >= size - 1
+        if kind_ == "mpeg-ts":                   # a sync byte every 188 bytes, wherever one looks
+            packets = size // 188
+            for i in range(64):
+                at = (packets * i // 64) * 188
+                b = os.pread(fd, 1, at)
+                if b != b"\x47":
+                    return False
+            return packets > 0
+    except OSError:
+        return False
+    return False                                 # the other kinds have nothing cheap to check: treated as unproven
+
+
 def is_program(magic: bytes) -> bool:
     """Cheap test on the first bytes: is this something that can run?"""
     return magic[:4] == b"\x7fELF" or magic[:2] in (b"MZ", b"#!") or \
@@ -219,15 +285,32 @@ def looks_encrypted(path: str, head: bytes) -> bool:
         return False
     name = os.path.basename(path).lower()
     parts = name.split(".")
-    expected = _EXPECT.get(parts[-1]) if len(parts) > 1 else None
-    if expected is None and len(parts) > 2:
-        expected = _EXPECT.get(parts[-2])      # report.docx.locked
+    expected = None
+    for part in reversed(parts[1:][-4:]):      # report.docx, report.docx.locked, report.docx.id-1234.locked
+        expected = _EXPECT.get(part)
+        if expected is not None:
+            break
     if not expected:
         return False
-    if kind(head) in expected:
+    got = kind(head)
+    if got in expected:
         return False
     # also when only the beginning was encrypted (fast, "intermittent" ransomware)
-    return entropy(head) > 7.5 or entropy(head[:4096]) > 7.5
+    if entropy(head) > 7.5 or entropy(head[:4096]) > 7.5:
+        return True
+    # ... and when the encrypted content was written out as text (base64):
+    # a picture or an office document is never a wall of such letters.
+    return "text" not in expected and got == "text" and _armoured(head)
+
+
+_B64 = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=-_\r\n")
+
+
+def _armoured(head: bytes) -> bool:
+    sample = head[:8192]
+    if len(sample) < 4096:
+        return False
+    return sum(1 for b in sample if b in _B64) >= len(sample) * 0.99 and entropy(sample) > 5.5
 
 
 def promises_format(path: str) -> bool:

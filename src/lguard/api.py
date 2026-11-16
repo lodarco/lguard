@@ -78,6 +78,7 @@ class Api:
         self.index_path = index_path
         self.daemon = daemon
         self.log = log
+        self.user_scans: set[int] = set()
         self.subscribers: list[tuple[queue.Queue, int]] = []      # (queue, uid)
         self.lock = threading.Lock()
         self.connections: dict[int, int] = {}                     # uid -> open connections
@@ -273,6 +274,8 @@ class Api:
             "realtime": bool(d) and not d.stop.is_set() and d.healthy(),
             "trouble": (d.fatal or "") if d else "",
             "watched": d.watched if d else [],
+            # what could hold files and is left out, with the reason
+            "not_watched": [list(e) for e in self._not_watched()],
             "files": self._file_count(idx), "counts": counts,
             "last_sweep": idx.meta_get("last_sweep"),
             "frozen": idx.meta_get("frozen", "no"),
@@ -288,6 +291,13 @@ class Api:
             "sweep_control": idx.meta_get("sweep_control") or {},
             "stats": dict(d.stats) if d else {},
         }
+
+    def _not_watched(self):
+        from .sweep import mounts
+        try:
+            return [] if self.cfg.roots else mounts(self.cfg.watch_network)[1]
+        except OSError:
+            return []
 
     def _file_count(self, idx) -> int:
         """Counting walks the whole inventory; the app asks every few seconds."""
@@ -620,5 +630,18 @@ class Api:
         path = os.path.realpath(str(path))
         if not os.path.exists(path):
             raise ValueError(f"no such file or folder: {path}")
-        threading.Thread(target=self.daemon.enqueue_tree, args=(path,), daemon=True).start()
+        # One scan per user at a time, and behind the files that are changing
+        # right now: a scan anyone can ask for must not hold up the guard.
+        with self.lock:
+            if uid in self.user_scans:
+                raise RuntimeError("a scan you started is still being queued")
+            self.user_scans.add(uid)
+
+        def run():
+            try:
+                self.daemon.enqueue_tree(path, "user request", 0 if uid == 0 else 2)
+            finally:
+                with self.lock:
+                    self.user_scans.discard(uid)
+        threading.Thread(target=run, daemon=True).start()
         return {"queued": path}

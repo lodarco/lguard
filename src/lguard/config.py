@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import time
 import tomllib
 from dataclasses import dataclass, field
 
@@ -14,16 +15,17 @@ CONFIG_PATH = os.environ.get("LGUARD_CONFIG", "/etc/lguard/lguard.toml")
 STATE_DIR = os.environ.get("LGUARD_STATE", "/var/lib/lguard")
 
 # Never looked at: pseudo filesystems, read-only images, other engines'
-# signature files, our own state, container layers (rewritten on every pull)
-# and downloads that are still being written (scanned when they finish).
+# signature files, our own state and the system's container layers
+# (rewritten on every pull). Only places an ordinary user cannot create:
+# an exclusion that anyone can pick by naming a file or a folder is a way
+# past the guard, so those are "soft" below (programs there are scanned).
 DEFAULT_EXCLUDES = [
     "/proc/*", "/sys/*", "/run/*", "/dev/pts/*", "/dev/mqueue/*",
     "/var/lib/lguard/*", "/var/lib/clamav/*", "/var/lib/snapd/*", "/snap/*",
     "/var/lib/containers/*", "/var/lib/docker/*",
-    "/tmp/.mount_*",                       # AppImage FUSE mounts
-    "*/.local/share/containers/*",
-    "*.!qB", "*.part", "*.crdownload",
 ]
+# Below /run, these belong to users and are not exempt.
+RUN_NOT_EXCLUDED = ("/run/user/", "/run/media/")
 
 # Places that churn constantly (caches, logs, live databases). Their data
 # files are not scanned, but a *program* found there is: caches are a
@@ -42,9 +44,17 @@ DEFAULT_SOFT_EXCLUDES = [
     "*/__pycache__/*",
     "*/appdata_*/preview/*",               # Nextcloud thumbnails
     "*.sqlite-wal", "*.sqlite-shm", "*.db-wal", "*.db-shm", "*-journal",
+    "/run/user/*",
+    "/tmp/.mount_*",                       # AppImage FUSE mounts
+    "*/.local/share/containers/*",         # a user's own container layers
 ]
 
+# Downloads that are still being written. They are left alone while they
+# change (they are scanned under their real name when they finish) - but a
+# file that keeps such a name and has been quiet for INCOMPLETE_GRACE_S is
+# checked like any other: the name alone is no way to stay unseen.
 INCOMPLETE = ("*.!qB", "*.part", "*.crdownload")
+INCOMPLETE_GRACE_S = 3600
 
 # Where the operating system keeps its own programs. Used to tell a system
 # tool (tar, rsync) from a program started out of a home or temp folder.
@@ -79,6 +89,15 @@ class Config:
     priority_paths: list[str] = field(default_factory=list)
     # User data where the ransomware detector looks.
     data_paths: list[str] = field(default_factory=lambda: ["/home"])
+    # Filled in by the service when data_paths was left at its default: the
+    # other disks that are watched (data disks, USB drives), without the
+    # category folders. Not a setting.
+    data_mounts: list[str] = field(default_factory=list)
+    data_paths_set: bool = False
+    # Network shares (NFS, SMB, sshfs) are watched and walked only on request:
+    # changes made from other machines are not seen anyway, and a whole NAS
+    # is a lot to read every night.
+    watch_network: bool = False
     excludes: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
     soft_excludes: list[str] = field(default_factory=lambda: list(DEFAULT_SOFT_EXCLUDES))
     extra_excludes: list[str] = field(default_factory=list)
@@ -109,6 +128,15 @@ class Config:
     # removed once are still quarantined at once. 0 = always quarantine.
     hold_old_days: int = 30
     quarantine_dir: str = os.path.join(STATE_DIR, "quarantine")
+    # A file from another disk is copied into quarantine; that must not fill
+    # the system disk. Beyond these limits a detection is reported and left
+    # in place (and says so).
+    quarantine_max_bytes: int = 20 * 1024 ** 3
+    quarantine_min_free_bytes: int = 2 * 1024 ** 3
+    # At most this many alerts in ten minutes; the rest are counted and
+    # announced together (a folder full of detections must not ring the
+    # phone five hundred times).
+    alert_burst: int = 12
     # path-prefix -> command run after a file under it was quarantined
     # ("{path}" is replaced). E.g. Nextcloud files:scan.
     post_quarantine_hooks: dict[str, str] = field(default_factory=dict)
@@ -155,6 +183,8 @@ class Config:
             return True
         for pat in self.excludes + self.extra_excludes:
             if fnmatch.fnmatchcase(path, pat):
+                if pat == "/run/*" and path.startswith(RUN_NOT_EXCLUDED):
+                    continue
                 return True
         return False
 
@@ -168,6 +198,18 @@ class Config:
     @staticmethod
     def is_incomplete(path: str) -> bool:
         return any(fnmatch.fnmatchcase(path, pat) for pat in INCOMPLETE)
+
+    @classmethod
+    def is_downloading(cls, path: str, mtime: float | None = None) -> bool:
+        """Named like a download in progress AND written recently."""
+        if not cls.is_incomplete(path):
+            return False
+        if mtime is None:
+            try:
+                mtime = os.lstat(path).st_mtime
+            except OSError:
+                return False
+        return time.time() - mtime < INCOMPLETE_GRACE_S
 
     def mode_of(self, path: str) -> str:
         """"media" or "downloads" for a path in a priority folder."""
@@ -204,7 +246,12 @@ class Config:
         return best
 
     def is_data(self, path: str) -> bool:
-        return any(path == p or path.startswith(p.rstrip("/") + "/") for p in self.data_paths)
+        if any(path == p or path.startswith(p.rstrip("/") + "/") for p in self.data_paths):
+            return True
+        # Other disks count as well, but not the download and media folders
+        # on them: half-written downloads look much like encrypted files.
+        return any(path == p or path.startswith(p.rstrip("/") + "/") for p in self.data_mounts) \
+            and not self.is_priority(path)
 
     def may_quarantine(self, path: str) -> bool:
         if not self.quarantine:
@@ -238,8 +285,10 @@ def load(path: str = CONFIG_PATH) -> Config:
                     p.rstrip("/") + "/*" for p in value if p.rstrip("/") + "/*" not in cfg.never_quarantine]
                 cfg.report_only = list(value)
                 continue
-            if not hasattr(cfg, key):
+            if not hasattr(cfg, key) or key in ("data_mounts", "data_paths_set"):
                 raise ValueError(f"{fp}: unknown setting {key!r}")
+            if key == "data_paths":
+                cfg.data_paths_set = True
             if key in ("categories", "category_modes") and fp != path:
                 merged = dict(getattr(cfg, key))
                 merged.update(value)

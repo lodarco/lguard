@@ -448,10 +448,8 @@ class FindingsPage(Page):
             t.addWidget(label(r["path"].rsplit("/", 1)[-1], bold=True, size=16))
             t.addWidget(label(explain(sig), wrap=True))
             detail = r.get("detail") or ""
-            if "unchanged since signing" in detail:
-                who = detail.split('"')[1] if detail.count('"') >= 2 else ""
-                t.addWidget(label(_("Publisher signature intact – this is often a false alarm.")
-                                  + (f" ({who})" if who else ""), wrap=True))
+            if "signature block that matches" in detail or "unchanged since signing" in detail:
+                t.addWidget(label(_("The file carries a signature block that matches its content. The signature itself is not verified, so this says nothing about who made the file."), wrap=True))
             p = label(r["path"], "Dim", wrap=True)
             p.setStyleSheet(theme.MONO_CSS + " font-size: 12px;")
             t.addWidget(p)

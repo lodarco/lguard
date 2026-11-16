@@ -41,7 +41,9 @@ def _parse(reply: str) -> ClamResult:
     body = reply.split(": ", 1)[1] if ": " in reply else reply
     if body.endswith(" FOUND"):
         sig = body[: -len(" FOUND")]
-        if sig.startswith("Heuristics.Limits.Exceeded"):
+        # Too big or too deep to look into, or locked with a password: not a
+        # threat by itself, but never "clean" either.
+        if sig.startswith(("Heuristics.Limits.Exceeded", "Heuristics.Encrypted.")):
             return ClamResult(False, sig, reply, limited=True)
         return ClamResult(True, sig, reply)
     if body == "OK":

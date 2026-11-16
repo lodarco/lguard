@@ -36,8 +36,10 @@ class Signature:
         who = f' by "{self.signer}"' if self.signer else ""
         if not self.intact:
             return f"signed{who}, but the content was changed after signing"
-        own = ", self-signed" if self.self_signed else ""
-        return f"signed{who}{own}, unchanged since signing (publisher not verified)"
+        # Only the digest written in the signature block was compared with the
+        # content. The signature and the certificate were NOT verified, and
+        # anyone can write such a block: this is no proof of who made the file.
+        return "carries a signature block that matches its content (signature not verified)"
 
 
 # ------------------------------------------------------------------- DER

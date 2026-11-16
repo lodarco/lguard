@@ -78,9 +78,11 @@ starts encrypting your files.
 - **False alarms do not break things**: a detection in a file that has not
   changed for a month, met by a background check, is reported and left in
   place for you to decide; new and changed files, the category folders and
-  a program that is being started are quarantined at once. For Windows
-  programs the finding says whether the publisher signature is still intact
-  (a virus that writes itself into a program breaks it). One decision –
+  a program that is being started are quarantined at once. A Windows
+  program whose content no longer matches its signature block (a virus that
+  wrote itself into it) is quarantined however old it is; a block that
+  matches proves nothing, since the signature itself is not verified, and
+  the finding says so. One decision –
   trust or delete – settles every copy of the same content on all disks.
 - **Ransomware shield**: documents that turn into random data, one program
   rewriting hundreds of existing files, or one program deleting documents
@@ -178,7 +180,16 @@ It does not block a program from starting before it has been scanned: files
 are checked within seconds of being written, not at the moment of execution.
 Detection of known threats is ClamAV's. The ransomware shield reacts to what
 encryption looks like; encryption that keeps file headers intact and leaves
-the names alone is not recognised by it.
+the names alone is not recognised by it, and a program that keeps its files
+open is only seen when it closes them.
+
+What is not looked at: network shares (NFS, SMB, sshfs) unless
+`watch_network = true`; the system's container layers; data files in caches
+and in the other "soft" places (a program there is scanned). A download
+still being written (`.part`, `.crdownload`, `.!qB`) is left alone while it
+changes and checked once it has been quiet for an hour. A password-protected
+archive, a file bigger than the engine takes whole and a big file that only
+starts like a film are recorded as "partial", never as clean.
 
 ## Tests
 

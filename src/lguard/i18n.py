@@ -25,9 +25,9 @@ MESSAGES = {
              "es": "{sig}\n{path}\nSin cambios desde hace {days} días, por eso se dejó en su sitio. Decida en Lguard: confiar o eliminar."},
     "held_title": {"en": "Possible threat in an old file", "de": "Mögliche Bedrohung in einer alten Datei",
                    "es": "Posible amenaza en un archivo antiguo"},
-    "signed_ok": {"en": "Publisher signature intact{who} – this is often a false alarm.",
-                  "de": "Herausgebersignatur intakt{who} – das ist oft ein Fehlalarm.",
-                  "es": "Firma del editor intacta{who}: a menudo es una falsa alarma."},
+    "signed_ok": {"en": "The file carries a signature block that matches its content. The signature itself is not verified, so this says nothing about who made the file.",
+                  "de": "Die Datei enthält einen Signaturblock, der zu ihrem Inhalt passt. Die Signatur selbst wird nicht geprüft; über den Urheber der Datei sagt das nichts.",
+                  "es": "El archivo lleva un bloque de firma que coincide con su contenido. La firma en sí no se verifica, así que no dice nada sobre quién creó el archivo."},
     "signed_broken": {"en": "The file was changed after its publisher signed it.",
                       "de": "Die Datei wurde nach der Signatur des Herausgebers verändert.",
                       "es": "El archivo fue modificado después de que el editor lo firmara."},
@@ -68,6 +68,19 @@ MESSAGES = {
     "clamd_down_body": {"en": "The scan engine does not answer; files are queued.",
                         "de": "Die Scan-Engine antwortet nicht; Dateien warten in der Warteschlange.",
                         "es": "El motor de análisis no responde; los archivos esperan en cola."},
+    "alerts_held_back": {
+        "en": "({n} more alerts in the last minutes were not sent one by one; see the findings in Lguard.)",
+        "de": "({n} weitere Meldungen der letzten Minuten wurden nicht einzeln gesendet; siehe die Funde in Lguard.)",
+        "es": "({n} alertas más de los últimos minutos no se enviaron una por una; vea los hallazgos en Lguard.)"},
+    "ransom_user": {"en": "User: {user}.", "de": "Benutzer: {user}.", "es": "Usuario: {user}."},
+    "freeze_capped": {
+        "en": "Backups/sync were NOT frozen again: this user already caused {n} freezes today. Freeze by hand if this is real: lguard freeze",
+        "de": "Backup/Sync wurden NICHT erneut eingefroren: Dieser Benutzer hat heute bereits {n} Mal ein Einfrieren ausgelöst. Bei echtem Befall von Hand einfrieren: lguard freeze",
+        "es": "Las copias/sincronización NO se congelaron de nuevo: este usuario ya provocó {n} congelaciones hoy. Si es real, congele a mano: lguard freeze"},
+    "ransom_also_stopped": {
+        "en": "Another program doing the same was suspended as well: {proc} (pid {pids}). Let it continue: lguard resume-process",
+        "de": "Ein weiteres Programm mit demselben Verhalten wurde ebenfalls angehalten: {proc} (PID {pids}). Fortsetzen: lguard resume-process",
+        "es": "Otro programa con el mismo comportamiento también fue suspendido: {proc} (pid {pids}). Para continuar: lguard resume-process"},
     "self_title": {"en": "Lguard needs attention", "de": "Lguard braucht Aufmerksamkeit",
                    "es": "Lguard necesita atención"},
     "db_rebuilt_body": {

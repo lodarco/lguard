@@ -16,11 +16,36 @@ class Excludes(unittest.TestCase):
 
     def test_hard_excludes(self):
         c = config.Config()
-        for p in ("/proc/1/mem", "/var/lib/lguard/index.db", "/home/u/Downloads/setup.exe.part",
-                  "/home/u/Downloads/Unconfirmed 12.crdownload"):
+        for p in ("/proc/1/mem", "/var/lib/lguard/index.db", "/run/systemd/x", "/var/lib/docker/overlay2/a/b"):
             self.assertTrue(c.is_excluded(p), p)
-        self.assertTrue(c.is_incomplete("/x/a.part"))
         self.assertFalse(c.is_excluded("/home/u/Downloads/setup.exe"))
+
+    def test_no_exclusion_can_be_picked_by_naming_a_file_or_folder(self):
+        c = config.Config()
+        for p in ("/home/u/Downloads/setup.exe.part", "/home/u/Downloads/Unconfirmed 12.crdownload", "/home/u/x.!qB",
+                  "/home/u/anything/.local/share/containers/payload", "/tmp/.mount_fake/payload",
+                  "/run/user/1000/payload", "/run/media/u/STICK/payload"):
+            self.assertFalse(c.is_excluded(p), p)
+        # the users' own corners are "soft": their data is skipped, a program there is not
+        for p in ("/home/u/anything/.local/share/containers/payload", "/tmp/.mount_fake/payload", "/run/user/1000/payload"):
+            self.assertTrue(c.is_soft_excluded(p), p)
+
+    def test_a_download_is_left_alone_only_while_it_is_being_written(self):
+        import time
+        c = config.Config()
+        self.assertTrue(c.is_incomplete("/x/a.part"))
+        self.assertTrue(c.is_downloading("/x/a.part", time.time() - 60))
+        self.assertFalse(c.is_downloading("/x/a.part", time.time() - 2 * 3600))     # kept the name, stopped changing
+        self.assertFalse(c.is_downloading("/x/a.iso", time.time()))
+
+    def test_other_disks_count_as_data_unless_the_user_said_where_the_data_is(self):
+        c = config.Config()
+        c.data_mounts = ["/mnt/photos"]
+        c.categories = {"downloads": ["/mnt/photos/incoming"]}
+        self.assertTrue(c.is_data("/home/u/a.docx"))
+        self.assertTrue(c.is_data("/mnt/photos/2024/a.jpg"))
+        self.assertFalse(c.is_data("/mnt/photos/incoming/film.mkv"))                # half-written downloads look encrypted
+        self.assertFalse(c.is_data("/srv/x"))
 
 
 class Categories(unittest.TestCase):

@@ -85,7 +85,7 @@ class PublisherSignature(unittest.TestCase):
     def test_self_signed_is_said_so(self):
         s = check(signed_program(self_signed=True))
         self.assertTrue(s.intact and s.self_signed)
-        self.assertIn("self-signed", s.describe())
+        self.assertIn("signature not verified", s.describe())      # no name, no "self-signed": nothing was verified
 
     def test_unsigned_and_other_files_have_none(self):
         self.assertIsNone(check(b"MZ" + b"\0" * 600))
@@ -165,8 +165,8 @@ class OldFiles(unittest.TestCase):
         hit = util.write(os.path.join(self.home, "old/infected.exe"), bytes(bad))
         r = self.sc.scan(kept)
         self.assertEqual(r.action, "held")
-        self.assertIn("unchanged since signing", r.detail)
-        self.assertIn("Example Software Ltd", self.idx.findings()[0]["detail"])
+        self.assertIn("signature block that matches", r.detail)
+        self.assertNotIn("Example Software Ltd", self.idx.findings()[0]["detail"])    # a name anyone can write is not passed on
         r = self.sc.scan(hit)
         self.assertEqual(r.action, "quarantined")
         self.assertIn("changed after signing", r.detail)

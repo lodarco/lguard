@@ -61,6 +61,7 @@ def sandbox():
     cfg.quarantine_dir = os.path.join(top, "quarantine")
     cfg.never_quarantine = []
     cfg.desktop_notify = False
+    cfg.alert_burst = 10 ** 9                 # the tests send more alerts than a real day does
     cfg.data_paths = [os.path.join(top, "home")]
     os.makedirs(os.path.join(top, "home"))
     idx = Index(os.path.join(top, "index.db"), vault.Vault(os.urandom(32)))

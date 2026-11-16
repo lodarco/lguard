@@ -190,6 +190,10 @@ def _status_via_service():
     print(f"version:       {d.get('version', '?')}")
     print(f"engine:        {d['engine']}, signatures {d['signatures']}" + ("" if d.get("engine_ok") else "  (NOT RUNNING)"))
     print(f"real-time:     {'on' if d.get('realtime') else 'OFF'}; watching {', '.join(d.get('watched') or [])}")
+    if d.get("trouble"):
+        print(f"               TROUBLE: {d['trouble']}")
+    for mnt, why in d.get("not_watched") or []:
+        print(f"               not watched: {mnt} - {why}")
     print(f"key:           {d['key']}")
     print(f"inventory:     {d['files']} files"
           + (f" (clean {c.get('clean', 0)}, partly checked {c.get('partial', 0)}, infected {c.get('infected', 0)})" if c else ""))

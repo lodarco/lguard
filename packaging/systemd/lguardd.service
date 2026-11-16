@@ -14,6 +14,10 @@ Restart=always
 RestartSec=10
 Nice=5
 OOMScoreAdjust=-500
+# What it writes is for root only; and it has an upper bound on memory, so
+# that a fault in it cannot starve the machine it protects.
+UMask=0077
+MemoryMax=4G
 TimeoutStopSec=30
 # Root is needed to read every file and to move threats away; the rest is
 # closed. (Freeze commands and notifications still run from here.)

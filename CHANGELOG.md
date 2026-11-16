@@ -1,5 +1,64 @@
 # Changes
 
+## 0.2.3
+
+Ways past the guard that are closed
+- No exclusion can be picked by naming a file or a folder any more. A file
+  called `x.part`, `.crdownload` or `.!qB` used to be skipped by everything,
+  for good; now it is left alone only while it is being written and checked
+  once it has been quiet for an hour. Folders that any user can create
+  (`.../.local/share/containers/`, `/tmp/.mount_*`, `/run/user/<uid>`) are
+  "soft": their data is skipped, a program in them is scanned.
+- More than the usual disks are watched: every filesystem that can hold
+  files (tmpfs such as `/tmp` where it is one, FUSE pools, encrypted homes,
+  bcachefs, mounted images), not a fixed list of known ones. Network shares
+  stay out unless `watch_network = true`.
+- A big file is treated as a film (checked at its beginning and end only)
+  only if it holds together as one - MP4 boxes, Matroska header and segment,
+  RIFF chunks, MPEG-TS sync bytes. A disk image that merely starts like a
+  film is "partial", not clean.
+- Password-protected archives and documents are reported by the engine and
+  recorded as "partial": they cannot be looked into.
+- A verdict is remembered for a content only if the file did not change
+  while it was checked (it could be shown to the hash step with one content
+  and to the engine with another).
+
+Ransomware shield
+- Files are counted per program and per user: one program writing while
+  another deletes is still one user's doing.
+- After an alarm, a second program behaving the same way is suspended too
+  instead of being ignored for half an hour.
+- The alarm names the user. One user can cause three freezes of the
+  backups a day; after that the alarm is still raised, the freeze is not
+  repeated on that user's say-so.
+- Other disks count as user data when `data_paths` is left at its default
+  (without the download and media folders on them).
+- Encrypted files are also recognised behind several appended extensions
+  (`report.docx.id-1234.locked`) and when the ciphertext is written out as
+  text.
+
+Limits
+- Copies into the quarantine stop at `quarantine_max_bytes` (20 GB) and
+  before the system disk runs full; the detection is then reported and left
+  in place.
+- At most `alert_burst` (12) alerts in ten minutes; the rest are counted and
+  announced with the next one. Ransomware and self-check alerts always go
+  out.
+- The scan queue is bounded, a scan asked for from the app runs behind the
+  files that are changing now, one such scan per user at a time, and folders
+  that arrive by rename are walked a few at a time.
+- The service has an upper bound on memory and writes its files for root
+  only.
+
+Said plainly
+- The finding no longer says "publisher signature intact - often a false
+  alarm" and no longer names a signer: only a digest in the signature block
+  is compared, the signature is not verified, and anyone can write such a
+  block.
+- Settings files in users' homes (download clients) are read as plain small
+  files only: no link is followed, no device or pipe is read, and a profile
+  folder is taken only from the real program's command line.
+
 ## 0.2.2
 
 Lguard damaged its own inventory - fixed

@@ -42,6 +42,7 @@ from .sweep import Sweep, roots
 INDEX_PATH = os.path.join(config_mod.STATE_DIR, "index.db")
 # The inventory and SQLite's two side files: see Fanotify.protect().
 INDEX_FILES = (INDEX_PATH, INDEX_PATH + "-wal", INDEX_PATH + "-shm")
+WORK_MAX = 200_000              # files waiting for a scan worker
 SELF_ALERT_FILE = os.path.join(config_mod.STATE_DIR, "self-alert")
 
 
@@ -101,6 +102,7 @@ class Daemon:
         self.clamd_down_since = 0.0
         self.names: DirEvents | None = None                   # rename/delete events (Linux 5.9+)
         self.recheck: dict[str, float] = {}                   # folder -> look again until
+        self.tree_slots = threading.BoundedSemaphore(4)       # folders that arrived by rename, walked at once
         self.threads: list[threading.Thread] = []             # all of them must stay alive
         self.fatal: str | None = None                         # why the service must restart itself
 
@@ -162,6 +164,11 @@ class Daemon:
                 continue
             self.watched.append(r)
             new.append(r)
+            # Data disks and removable drives hold what ransomware is after,
+            # too. (Only when the user did not say where the data is.)
+            if not self.cfg.data_paths_set and r not in ("/", "/boot", "/dev/shm") \
+                    and not r.startswith(("/run/", "/tmp", "/var/")) and r not in self.cfg.data_mounts:
+                self.cfg.data_mounts.append(r)
             names = ""
             if self.names is not None:
                 try:
@@ -172,6 +179,8 @@ class Daemon:
             log(f"watching {r} ({how}{names})")
         for r in [r for r in self.watched if r not in now]:
             self.watched.remove(r)
+            if r in self.cfg.data_mounts:
+                self.cfg.data_mounts.remove(r)
             if self.names is not None:
                 self.names.unmark(r)
             log(f"no longer mounted: {r}")
@@ -232,7 +241,12 @@ class Daemon:
                 if not cfg.is_watched(path):
                     continue
                 if cfg.is_excluded(path):
-                    if self.names is None and cfg.is_incomplete(path):
+                    continue
+                if cfg.is_incomplete(path):
+                    # A download being written: scanned under its real name
+                    # when it is finished (and by the nightly check if it
+                    # keeps this name and stops changing).
+                    if self.names is None:
                         # no rename events: the finished download will show
                         # up in this folder under its real name
                         self.recheck[os.path.dirname(path)] = time.time() + 900
@@ -276,8 +290,11 @@ class Daemon:
                     if is_dir:
                         if cfg.is_soft_excluded(path + "/x"):
                             continue
-                        threading.Thread(target=self.enqueue_tree, args=(path, _proc_name(pid), 1),
-                                         daemon=True).start()
+                        if self.tree_slots.acquire(blocking=False):      # a few at a time; the rest is the sweep's
+                            threading.Thread(target=self._enqueue_tree_slot, args=(path, _proc_name(pid), 1),
+                                             daemon=True).start()
+                        else:
+                            self.stats["overflows"] += 1
                     else:
                         proc = _proc_name(pid)
                         self._queue(path, proc)
@@ -291,6 +308,23 @@ class Daemon:
                         self.ransom_q.put_nowait((path, _proc_name(pid), pid, what))
                     except queue.Full:
                         pass
+
+    def _enqueue_tree_slot(self, top, proc, prio):
+        try:
+            self.enqueue_tree(top, proc, prio)
+        finally:
+            self.tree_slots.release()
+
+    def push_work(self, item) -> bool:
+        """Queue one file for the scan workers. The queue has an end: beyond
+        it the file is left to the next check (which finds whatever changed)."""
+        with self.work_cv:
+            if len(self.work) >= WORK_MAX:
+                self.stats["overflows"] += 1
+                return False
+            heapq.heappush(self.work, item)
+            self.work_cv.notify()
+            return True
 
     def start_sweep(self, why: str):
         """Ask systemd for a quick check (it does nothing if one is running)."""
@@ -338,6 +372,9 @@ class Daemon:
                 with self.work_cv:
                     for p, proc in ready:
                         prio = 0 if cfg.is_priority(p) else 1
+                        if len(self.work) >= WORK_MAX:
+                            self.stats["overflows"] += 1      # the next check finds it
+                            continue
                         heapq.heappush(self.work, (prio, now, p, proc, "fresh"))
                         self.stats["queued"] += 1
                     self.work_cv.notify_all()
@@ -372,9 +409,9 @@ class Daemon:
         n = 0
         event = "" if proc == "user request" else "fresh"     # a folder that just arrived is new
         for p in files:
-            with self.work_cv:
-                heapq.heappush(self.work, (prio, now, p, proc, event))
-                self.work_cv.notify()
+            if not self.push_work((prio, now, p, proc, event)):
+                log(f"{top}: the scan queue is full, the rest is left to the next check")
+                break
             n += 1
             if n >= limit:
                 log(f"{top}: more than {limit} files, the rest is left to the next check")

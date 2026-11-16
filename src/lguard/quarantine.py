@@ -126,6 +126,14 @@ def quarantine(cfg: Config, path: str, fd: int, st: os.stat_result, digest: str 
             "mtime_ns": st.st_mtime_ns, "digest": digest, "signature": signature,
             "quarantined_at": time.time(),
         }
+        if os.stat(qdir).st_dev != st.st_dev:
+            # It has to be copied here. That must not fill the disk the
+            # system runs on, however many detections someone produces.
+            vfs = os.statvfs(qdir)
+            if st.st_size + cfg.quarantine_min_free_bytes > vfs.f_bavail * vfs.f_frsize:
+                raise QuarantineError("no room: the disk holding the quarantine is nearly full")
+            if store_size(qdir) + st.st_size > cfg.quarantine_max_bytes:
+                raise QuarantineError("the quarantine is full (quarantine_max_bytes); delete or restore entries in it")
         if os.stat(qdir).st_dev == st.st_dev:
             os.rename(base, dest, src_dir_fd=dfd)
             if not _same(os.lstat(dest), st):          # the name was swapped at the last moment
@@ -162,6 +170,21 @@ def quarantine(cfg: Config, path: str, fd: int, st: os.stat_result, digest: str 
     os.chmod(_meta_path(qdir, qid), 0o600)
     _run_hooks(cfg, real, log)
     return qid
+
+
+def store_size(qdir: str) -> int:
+    """Bytes the quarantine takes on its own disk."""
+    total = 0
+    try:
+        with os.scandir(qdir) as it:
+            for e in it:
+                try:
+                    total += e.stat(follow_symlinks=False).st_blocks * 512
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
 
 
 def entries(cfg: Config) -> list[dict]:

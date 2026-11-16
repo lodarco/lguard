@@ -14,26 +14,77 @@ from . import index as index_mod
 from .config import Config
 from .scanner import Result, Scanner
 
-LOCAL_FS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "zfs", "jfs", "reiserfs",
-            "fuseblk", "ntfs", "ntfs3", "vfat", "exfat"}
+# What holds no files of anyone's: kernel interfaces, and overlay/squashfs
+# views of files that are checked where they really are. Everything else is
+# watched - a list of "known good" filesystems would leave out the next new
+# one, and with it whatever is stored there.
+PSEUDO_FS = {
+    "proc", "sysfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "pstore", "bpf", "tracefs", "debugfs",
+    "securityfs", "configfs", "fusectl", "mqueue", "hugetlbfs", "autofs", "binfmt_misc", "efivarfs",
+    "rpc_pipefs", "nfsd", "selinuxfs", "ramfs", "nsfs", "squashfs", "overlay", "fuse.portal",
+    "fuse.gvfsd-fuse", "fuse.snapfuse", "fuse.lxcfs", "erofs",
+}
+NETWORK_FS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "ceph", "glusterfs", "afs", "ncpfs",
+              "fuse.sshfs", "fuse.rclone", "fuse.davfs", "davfs", "fuse.s3fs", "fuse.glusterfs"}
+SKIP_MOUNTS = ("/snap/", "/var/lib/snapd/", "/boot/efi", "/proc", "/sys", "/var/lib/docker/", "/var/lib/containers/",
+               "/tmp/.mount_")             # an AppImage showing its own (read-only) content while it runs
 
 
-def local_mounts() -> list[str]:
+def parse_mounts(text: str) -> list[tuple[str, str]]:
+    """[(mount point, filesystem type)] from the text of /proc/self/mounts."""
     out = []
-    with open("/proc/self/mounts") as f:
-        for line in f:
-            dev, mnt, fstype, *_ = line.split()
-            # the kernel writes space, tab, newline and backslash as \ooo
-            mnt = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), mnt)
-            if fstype in LOCAL_FS and not mnt.startswith(("/snap/", "/var/lib/snapd/", "/boot/efi")):
-                out.append(mnt)
-            elif fstype == "tmpfs" and mnt == "/dev/shm":
-                out.append(mnt)
-    return sorted(set(out))
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        # the kernel writes space, tab, newline and backslash as \ooo
+        out.append((re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), parts[1]), parts[2]))
+    return out
+
+
+def mounts(watch_network: bool = False, table: list[tuple[str, str]] | None = None,
+           dev_of=None) -> tuple[list[str], list[tuple[str, str]]]:
+    """(mount points to watch and walk, [(mount point, why not)] for the rest
+    that could hold files)."""
+    if table is None:
+        with open("/proc/self/mounts") as f:
+            table = parse_mounts(f.read())
+    if dev_of is None:
+        def dev_of(path):
+            st = os.stat(path)
+            # Not a folder, or a folder nobody may enter (mode 000): that is
+            # how a sandbox hides a place from a service, not a disk.
+            return st.st_dev if stat.S_ISDIR(st.st_mode) and stat.S_IMODE(st.st_mode) else None
+    watched, left, seen = [], [], set()
+    # Shortest first: a filesystem that shows up a second time further down
+    # (a bind mount, as systemd makes for a sandboxed service) is the same
+    # files again.
+    for mnt, fstype in sorted(set(table), key=lambda e: (len(e[0]), e[0])):
+        if fstype in PSEUDO_FS or mnt.startswith(SKIP_MOUNTS):
+            continue
+        # tmpfs below /run is the system's own state - except the users' folders there
+        if fstype == "tmpfs" and (mnt == "/run" or mnt.startswith("/run/")) and not mnt.startswith("/run/user/"):
+            continue
+        if fstype in NETWORK_FS and not watch_network:
+            left.append((mnt, f"network share ({fstype}); set watch_network = true to include it"))
+            continue
+        try:
+            dev = dev_of(mnt)
+        except OSError:
+            continue
+        if dev is None or dev in seen:       # not a folder, or these files are covered already
+            continue
+        seen.add(dev)
+        watched.append(mnt)
+    return sorted(set(watched)), sorted(set(left))
+
+
+def local_mounts(watch_network: bool = False) -> list[str]:
+    return mounts(watch_network)[0]
 
 
 def roots(cfg: Config) -> list[str]:
-    return cfg.roots or local_mounts()
+    return cfg.roots or local_mounts(cfg.watch_network)
 
 
 def walk(top: str, cfg: Config, same_dev: bool = True):
@@ -204,6 +255,11 @@ class Sweep:
                 self.maintenance(verify_budget=(1 << 62) if deep else None)
         finally:
             self.finish_progress()
+        if self.stop:
+            # Stopped half-way (an update, a shutdown): not a finished check.
+            self.index.event("sweep_stopped", "priority" if only_priority else "full")
+            self.index.commit()
+            return self.stats
         self.index.meta_set("last_priority_sweep" if only_priority else "last_sweep", time.time())
         self.index.event("sweep_end", f"{self.stats} in {int(time.time() - t0)}s")
         self.index.commit()

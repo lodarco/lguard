@@ -59,9 +59,66 @@ class Scanning(unittest.TestCase):
         self.cfg.full_scan_max = 1000
         self.cfg.media_partial_min = 1000
         blob = util.write(os.path.join(self.home, "installer.run"), b"\x7fELF" + b"x" * 5000)
-        film = util.write(os.path.join(self.home, "film.mkv"), b"\x1a\x45\xdf\xa3" + b"x" * 5000)
+        # a film that holds together as one: header, then the Segment
+        mkv = b"\x1a\x45\xdf\xa3" + b"\x84" + b"\x42\x82\x81w" + b"\x18\x53\x80\x67" + b"\x01" + b"\xff" * 7
+        film = util.write(os.path.join(self.home, "film.mkv"), mkv + b"x" * 5000)
         self.assertEqual(self.sc.scan(blob).verdict, "partial")
         self.assertEqual(self.sc.scan(film).verdict, "clean")
+
+    def test_a_big_file_that_merely_starts_like_a_film_is_not_called_clean(self):
+        self.cfg.full_scan_max = 1000
+        self.cfg.media_partial_min = 1000
+        for name, start in (("a.mkv", b"\x1a\x45\xdf\xa3"), ("b.mp4", b"\x00\x00\x00\x18ftypisom"), ("c.mp3", b"\xff\xfb"),
+                            ("d.avi", b"RIFF\x10\x00\x00\x00AVI ")):
+            fake = util.write(os.path.join(self.home, name), start + b"x" * 5000)
+            self.assertEqual(self.sc.scan(fake).verdict, "partial", name)
+
+    def test_what_a_real_film_file_looks_like(self):
+        from lguard import filetype
+
+        def ok(data, kind):
+            p = util.write(os.path.join(self.home, "probe.bin"), data)
+            fd = os.open(p, os.O_RDONLY)
+            try:
+                return filetype.media_structure_ok(fd, len(data), kind)
+            finally:
+                os.close(fd)
+        ftyp = b"\x00\x00\x00\x10ftypisom\x00\x00\x00\x00"
+        self.assertTrue(ok(ftyp + (1008).to_bytes(4, "big") + b"mdat" + b"x" * 1000, "mp4"))
+        self.assertTrue(ok(ftyp + b"\x00\x00\x00\x00mdat" + b"x" * 1000, "mp4"))             # last box "to the end"
+        self.assertFalse(ok(ftyp + (500).to_bytes(4, "big") + b"mdat" + b"x" * 1000, "mp4"))   # boxes do not add up
+        self.assertFalse(ok(ftyp + b"x" * 1000, "mp4"))
+        self.assertTrue(ok(b"RIFF" + (1004).to_bytes(4, "little") + b"AVI " + b"x" * 1000, "avi"))
+        self.assertFalse(ok(b"RIFF" + (100).to_bytes(4, "little") + b"AVI " + b"x" * 1000, "avi"))
+        self.assertTrue(ok((b"\x47" + b"x" * 187) * 200, "mpeg-ts"))
+        self.assertFalse(ok(b"\x47" + b"x" * 187 + b"y" * 188 * 199, "mpeg-ts"))
+        self.assertFalse(ok(b"\xff\xfb" + b"x" * 1000, "mpeg-audio"))                          # nothing cheap to check
+
+    def test_a_verdict_is_not_remembered_for_content_that_changed_while_it_was_checked(self):
+        p = util.write(os.path.join(self.home, "swap.bin"), b"\x7fELF" + b"first content")
+        real = self.clamd.scan_fd
+
+        def swap(fd):
+            r = real(fd)
+            with open(p, "wb") as f:                 # someone rewrites the file while the engine reads it
+                f.write(b"\x7fELF" + b"second, harmless content")
+            return r
+        self.clamd.scan_fd = swap
+        import hashlib
+        first = hashlib.sha256(b"\x7fELF" + b"first content").hexdigest()
+        r = self.sc.scan(p)
+        self.clamd.scan_fd = real
+        self.assertEqual(r.verdict, "error")                     # checked again later, not called clean
+        self.assertIsNone(self.idx.hash_verdict(first))
+        self.assertEqual(self.sc.scan(p).verdict, "clean")
+
+    def test_a_download_name_does_not_hide_a_file_for_good(self):
+        import time
+        p = util.write(os.path.join(self.home, "payload.part"), util.THREAT)
+        self.assertEqual(self.sc.scan(p).detail, "download in progress")
+        old = time.time() - 2 * 3600
+        os.utime(p, (old, old))
+        self.assertEqual(self.sc.scan(p).verdict, "infected")
 
     def test_category_modes(self):
         dl, lib = os.path.join(self.top, "dl"), os.path.join(self.top, "plex")

@@ -28,6 +28,24 @@ from .index import Index
 from .notify import notify
 
 COOLDOWN_S = 1800
+FREEZES_PER_USER_PER_DAY = 3
+
+
+def _uid_of(pid: int) -> int | None:
+    try:
+        return os.stat(f"/proc/{pid}").st_uid
+    except OSError:
+        return None
+
+
+def _user_name(uid: int | None) -> str:
+    if uid is None:
+        return "?"
+    try:
+        import pwd
+        return pwd.getpwuid(uid).pw_name
+    except (KeyError, ImportError):
+        return str(uid)
 
 
 def _start_time(pid: int) -> str | None:
@@ -71,6 +89,9 @@ class RansomDetector:
         self.created: dict[str, collections.deque] = collections.defaultdict(collections.deque)
         self.gone: dict[str, collections.deque] = collections.defaultdict(collections.deque)
         self.pids: dict[str, set] = collections.defaultdict(set)
+        self.uid_of: dict[str, int] = {}            # program -> the user it last ran as
+        self.alarmed: set[str] = set()              # programs dealt with in the current alarm
+        self.freezes: dict[int, collections.deque] = collections.defaultdict(collections.deque)
         self.last_alarm = 0.0
         self.last_tidy = time.time()
         self.on_alarm = None
@@ -93,6 +114,7 @@ class RansomDetector:
         live = set(self.rewrites) | set(self.created) | set(self.gone) | {p for _, _, p in self.suspects}
         for proc in [p for p in self.pids if p not in live]:
             del self.pids[proc]
+            self.uid_of.pop(proc, None)
 
     # ------------------------------------------------------------------ feed
     def feed(self, path: str, proc: str, pid: int = 0, what: str = "write"):
@@ -104,6 +126,9 @@ class RansomDetector:
             self._tidy(now)
         if pid:
             self.pids[proc].add(pid)
+            uid = _uid_of(pid)
+            if uid is not None:
+                self.uid_of[proc] = uid
         if what != "write":
             self._gone(path, proc, now)
             return
@@ -134,14 +159,16 @@ class RansomDetector:
             return
         w = cfg.ransom_rewrite_window_s
         if self.index.get(path) is not None:            # an existing file, rewritten
-            q = self.rewrites[proc]
-            q.append(now)
-            if self._trim(q, now, w) >= cfg.ransom_rewrite_files:
-                self._alarm(t("rewrite_body", proc=proc, n=len(q), mins=w // 60, frozen="{frozen}"), proc)
-                q.clear()
-                return
+            for key in self._keys(proc):
+                q = self.rewrites[key]
+                q.append(now)
+                if self._trim(q, now, w) >= cfg.ransom_rewrite_files:
+                    self._alarm(t("rewrite_body", proc=proc, n=len(q), mins=w // 60, frozen="{frozen}"), proc)
+                    q.clear()
+                    return
         else:                                           # a new file
-            self.created[proc].append(now)
+            for key in self._keys(proc):
+                self.created[key].append(now)
         self._combo(proc, now)
 
     def _gone(self, path: str, proc: str, now: float):
@@ -150,19 +177,30 @@ class RansomDetector:
             return
         if self.index.get(path) is None:                 # not a file we knew
             return
-        self.gone[proc].append(now)
+        for key in self._keys(proc):
+            self.gone[key].append(now)
         self._combo(proc, now)
+
+    def _keys(self, proc: str) -> list[str]:
+        """What a write or a deletion is counted under: the program, and the
+        user it runs as (one program writing while another deletes is still
+        one user's doing)."""
+        uid = self.uid_of.get(proc)
+        return [proc] if uid is None else [proc, f"user:{uid}"]
 
     def _combo(self, proc: str, now: float):
         cfg = self.cfg
         w = cfg.ransom_rewrite_window_s
-        n_gone = self._trim(self.gone[proc], now, w) if proc in self.gone else 0
-        n_new = ((self._trim(self.created[proc], now, w) if proc in self.created else 0)
-                 + (self._trim(self.rewrites[proc], now, w) if proc in self.rewrites else 0))
-        if n_gone >= cfg.ransom_combo_files and n_new >= cfg.ransom_combo_files:
-            self._alarm(t("combo_body", proc=proc, gone=n_gone, new=n_new, mins=w // 60, frozen="{frozen}"), proc)
-            self.gone[proc].clear()
-            self.created[proc].clear()
+        for key in self._keys(proc):
+            n_gone = self._trim(self.gone[key], now, w) if key in self.gone else 0
+            n_new = ((self._trim(self.created[key], now, w) if key in self.created else 0)
+                     + (self._trim(self.rewrites[key], now, w) if key in self.rewrites else 0))
+            if n_gone >= cfg.ransom_combo_files and n_new >= cfg.ransom_combo_files:
+                self._alarm(t("combo_body", proc=proc, gone=n_gone, new=n_new, mins=w // 60, frozen="{frozen}"), proc)
+                for k in self._keys(proc):
+                    self.gone[k].clear()
+                    self.created[k].clear()
+                return
 
     # ----------------------------------------------------------------- alarm
     def _stop(self, proc: str) -> list[int]:
@@ -195,11 +233,40 @@ class RansomDetector:
         # One alarm per attack, not one per file - but if the user has
         # unfrozen and the attack goes on, it counts as a new one.
         if now - self.last_alarm < COOLDOWN_S and (frozen or not self.cfg.freeze_commands):
+            # The alarm was raised already - but a second program doing the
+            # same is not left running just because the first one rang first.
+            if proc and proc not in self.alarmed:
+                self.alarmed.add(proc)
+                stopped = self._stop(proc)
+                if stopped:
+                    more = t("ransom_also_stopped", proc=proc, pids=", ".join(map(str, stopped)))
+                    self.index.event("ransom_alarm", more)
+                    self.index.commit()
+                    notify(self.cfg, t("ransom_title"), more, "urgent", covered=bool(self.on_alarm))
+                    if self.on_alarm:
+                        self.on_alarm(more)
             return
         self.last_alarm = now
+        self.alarmed = {proc}
         stopped = self._stop(proc)
-        frozen = frozen or freeze(self.cfg, self.index, f"ransomware alarm ({proc})", self.log)
-        body = body.replace("{frozen}", t("frozen") if frozen else t("not_frozen"))
+        uid = self.uid_of.get(proc)
+        capped = 0
+        if not frozen and uid is not None and uid != 0:
+            # Anyone can make files that look encrypted. Freezing the backups
+            # is harmless once; a user who triggers it again and again is
+            # reported instead of obeyed.
+            q = self.freezes[uid]
+            while q and q[0] < now - 86400:
+                q.popleft()
+            if len(q) >= FREEZES_PER_USER_PER_DAY:
+                capped = len(q)
+            else:
+                q.append(now)
+        if not capped:
+            frozen = frozen or freeze(self.cfg, self.index, f"ransomware alarm ({proc})", self.log)
+        body = body.replace("{frozen}", t("frozen") if frozen else
+                            t("freeze_capped", n=capped) if capped else t("not_frozen"))
+        body += "\n" + t("ransom_user", user=_user_name(uid))
         if stopped:
             body += "\n" + t("stopped", pids=", ".join(map(str, stopped)))
         self.index.event("ransom_alarm", body)
