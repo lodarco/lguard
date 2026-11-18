@@ -15,7 +15,11 @@ if "LGUARD_STATE" not in os.environ:
     os.environ["LGUARD_STATE"] = tempfile.mkdtemp(prefix="lguard-state-")
     _made.append(os.environ["LGUARD_STATE"])
 
-from lguard import config, vault                      # noqa: E402
+from lguard import config, notify, vault              # noqa: E402
+
+# Alerts raised by the tests stay in the tests: not a word of them in this
+# machine's journal, where they would read like the real thing.
+notify.syslog.syslog = lambda *a, **k: None
 from lguard.clamd import ClamResult                   # noqa: E402
 from lguard.index import Index                        # noqa: E402
 

@@ -37,6 +37,8 @@ DEFAULT_SOFT_EXCLUDES = [
     "*/.cache/*",
     "*/.local/share/Trash/info/*",
     "*/google-chrome/*/Cache/*", "*/chromium/*/Cache/*", "*/Code Cache/*",
+    # the same caches of every Electron app (desktop apps built on Chromium)
+    "*/Cache/Cache_Data/*", "*/blob_storage/*", "*/IndexedDB/*",
     "*/GPUCache/*", "*/Service Worker/CacheStorage/*",
     "*/.mozilla/firefox/*/cache2/*", "*/.mozilla/firefox/*/storage/*",
     "*/steamapps/shadercache/*", "*/steamapps/downloading/*",

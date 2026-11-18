@@ -115,6 +115,33 @@ class EncryptedLooking(unittest.TestCase):
         self.assertFalse(filetype.looks_encrypted("/h/photo.jpg", b"\xff\xd8\xff\xe0" + rnd))
 
 
+class Packed(unittest.TestCase):
+    def test_compressed_and_encoded_files_are_not_taken_for_encrypted_ones(self):
+        import base64, bz2, lzma, zlib
+        text = ("lorem ipsum dolor sit amet %d " * 4000).encode()
+        packed = {
+            "/h/go/src/testdata/e.txt.bz2": bz2.compress(text),
+            "/h/go/src/jsontest/twitter.json.zst": b"\x28\xb5\x2f\xfd" + os.urandom(70000),
+            "/h/go/src/testdata/data.json.xz": lzma.compress(text),
+            "/h/go/src/gzip/testdata/issue.gz.base64": base64.encodebytes(os.urandom(70000)),
+            "/h/backup/report.docx.gz": b"\x1f\x8b\x08" + os.urandom(70000),
+            "/h/backup/photo.jpg.7z": b"7z\xbc\xaf\x27\x1c" + os.urandom(70000),
+        }
+        for path, content in packed.items():
+            self.assertFalse(filetype.looks_encrypted(path, content[:65536]), path)
+        # ... while ransomware's own extensions still are
+        self.assertTrue(filetype.looks_encrypted("/h/report.docx.locked", os.urandom(70000)))
+        self.assertTrue(filetype.looks_encrypted("/h/photo.jpg.encrypted", os.urandom(70000)))
+
+    def test_electron_app_caches_are_soft(self):
+        from lguard import config
+        c = config.Config()
+        for p in ("/home/u/.config/SomeApp/Cache/Cache_Data/f_000123", "/home/u/.config/SomeApp/IndexedDB/https_x/1.blob",
+                  "/home/u/.config/SomeApp/blob_storage/abc/1"):
+            self.assertTrue(c.is_soft_excluded(p), p)
+        self.assertFalse(c.is_soft_excluded("/home/u/Documents/Cache.docx"))
+
+
 class Ransom(unittest.TestCase):
     def setUp(self):
         self.top, self.cfg, self.idx = sandbox()

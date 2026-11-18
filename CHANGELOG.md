@@ -7,6 +7,15 @@
   clearing its runtime folder while the game filled its shader cache looked
   like "one program deleting documents and writing unreadable files". Files
   are counted per program again, as before 0.2.3.
+- A file packed on purpose (`data.json.zst`, `notes.txt.bz2`, `x.gz.base64`)
+  was taken for an encrypted document because of the extension before the
+  last one: unpacking a programming language's sources raised the alarm.
+  A compressor's or an encoding's extension at the end, or content that
+  really is a compressed or archive format, is not "encrypted".
+- The caches of Electron desktop apps (`Cache/Cache_Data`, `IndexedDB`,
+  `blob_storage`) are treated like the browsers' caches: a desktop app
+  refreshing its cache rewrote 300 files in five minutes and raised the
+  alarm.
 
 ## 0.2.3
 

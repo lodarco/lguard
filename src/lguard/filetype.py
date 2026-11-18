@@ -285,6 +285,11 @@ def looks_encrypted(path: str, head: bytes) -> bool:
         return False
     name = os.path.basename(path).lower()
     parts = name.split(".")
+    # A file packed or encoded on purpose says so in its last extension
+    # (data.json.zst, notes.txt.bz2, archive.gz.base64): its content is meant
+    # to look like that, whatever the name said before.
+    if parts[-1] in PACKED_EXT:
+        return False
     expected = None
     for part in reversed(parts[1:][-4:]):      # report.docx, report.docx.locked, report.docx.id-1234.locked
         expected = _EXPECT.get(part)
@@ -294,6 +299,9 @@ def looks_encrypted(path: str, head: bytes) -> bool:
         return False
     got = kind(head)
     if got in expected:
+        return False
+    # Real compressed or archive content is not ciphertext, whatever the name.
+    if got in NATURALLY_DENSE or got in ARCHIVE_KINDS:
         return False
     # also when only the beginning was encrypted (fast, "intermittent" ransomware)
     if entropy(head) > 7.5 or entropy(head[:4096]) > 7.5:
@@ -311,6 +319,11 @@ def _armoured(head: bytes) -> bool:
     if len(sample) < 4096:
         return False
     return sum(1 for b in sample if b in _B64) >= len(sample) * 0.99 and entropy(sample) > 5.5
+
+
+# Last extensions that mean "packed or encoded": compressors, archives, text encodings.
+PACKED_EXT = {"gz", "gzip", "bz2", "xz", "zst", "zstd", "lz4", "lzma", "lz", "br", "z", "sz", "zip", "7z", "rar",
+              "tgz", "tbz2", "txz", "base64", "b64", "uue", "uu", "hex"}
 
 
 def promises_format(path: str) -> bool:
